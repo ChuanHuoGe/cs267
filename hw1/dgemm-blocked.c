@@ -151,24 +151,22 @@ void square_dgemm(int lda, double* A, double* B, double* C) {
                 // C -> (bi, bj)
                 double *C_block = C_packed + (bi + bj * griddim) * BLOCK_SIZE * BLOCK_SIZE;
                 // small block matrix multiplication
-                /* for(int j = 0; j < BLOCK_SIZE; ++j){ */
-                /*     for(int i = 0; i < BLOCK_SIZE; ++i){ */
-                /*         double c = 0.; */
-                /*         for(int k = 0; k < BLOCK_SIZE; ++k){ */
-                /*             // (i, k) * (k, j) */
-                /*             // but because of transpose -> (k, i) * (k, j) */
-                /*             c += A_block[k + i * BLOCK_SIZE] * B_block[k + j * BLOCK_SIZE]; */
-                /*         } */
-                /*         C_block[i + j * BLOCK_SIZE] += c; */
-                /*     } */
-                /* } */
-                for(int k = 0; k < BLOCK_SIZE; ++k){
-                    for(int j = 0; j < BLOCK_SIZE; ++j){
-                        for(int i = 0; i < BLOCK_SIZE; ++i){
+                for(int j = 0; j < BLOCK_SIZE; ++j){
+                    for(int i = 0; i < BLOCK_SIZE; ++i){
+                        double c = 0.;
+                        for(int k = 0; k < BLOCK_SIZE; k += 8){
                             // (i, k) * (k, j)
                             // but because of transpose -> (k, i) * (k, j)
-                            C_block[i + j * BLOCK_SIZE] += A_block[k + i * BLOCK_SIZE] * B_block[k + j * BLOCK_SIZE];
+                            // SIMD
+                            __m512d Ar;
+                            __m512d Br;
+                            __m512d Cr;
+                            Ar = _mm512_load_pd(A_block + k + i * BLOCK_SIZE);
+                            Br = _mm512_load_pd(B_block + k + j * BLOCK_SIZE);
+                            Cr = _mm512_mul_pd(Ar, Br);
+                            c += _mm512_reduce_add_pd(Cr);
                         }
+                        C_block[i + j * BLOCK_SIZE] += c;
                     }
                 }
             }
