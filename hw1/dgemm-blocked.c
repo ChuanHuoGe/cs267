@@ -1,185 +1,250 @@
 #include <immintrin.h>
 #include <string.h>
+#include <assert.h>
 
-/* const char* dgemm_desc = "Simple blocked dgemm."; */
-const char* dgemm_desc = "Simple blocked dgemm. blocking";
-
-#ifndef BLOCK_SIZE
-#define BLOCK_SIZE 16
-#endif
-
-#define min(a, b) (((a) < (b)) ? (a) : (b))
-
+const char* dgemm_desc = "Pure SIMD";
 /*
- * This auxiliary subroutine performs a smaller dgemm operation
- *  C := C + A * B
- * where C is M-by-N, A is M-by-K, and B is K-by-N.
+It likely only has 32 AVX512 registers. But the AVX2 instruction set only supports 16 ymm registers in the instruction set. Any AVX2 operations executing on KNL will only one half of each AVX512 register (there aren't a separate set of registers for AVX2, it's just going to repurpose the registers for AVX512. From there, there are two possibilities:
+- You would only be able to use 16 registers, since that's the ymm count in the AVX2 instruction set
+
+- The compiler will be smart enough to recognize that it really has 32 zmm registers available, and it will generate instructions to use the bottom half of each one.
+
+Either way, you won't see 64 256-bit registers. I'm not sure if the compiler is even smart enough to do the second thing. At this point, you should generate the assembly code, figure out what the behavior is, and include it in your report.
+
+A side note: we should distinguish between the Cori machine, which has thousands of both KNL and Haswell nodes, and a single KNL chip, which is what we are talking about.
  */
-static void do_block(int lda, int M, int N, int K, double* A, double* B, double* C) {
-    // For each row i of A
-    for (int i = 0; i < M; ++i) {
-        // For each column j of B
-        for (int j = 0; j < N; ++j) {
-            // Compute C(i,j)
-            double cij = C[i + j * lda];
-            for (int k = 0; k < K; ++k) {
-                cij += A[i + k * lda] * B[k + j * lda];
-            }
-            C[i + j * lda] = cij;
-        }
-    }
-}
 
-// add -funroll-loops -> 2 percent
-static void do_block_fixsize(int lda, int M, int N, int K, double* A, double* B, double* C) {
-    // Put into contiguous array
-    double A_cpy[BLOCK_SIZE * BLOCK_SIZE] = {0};
-    double B_cpy[BLOCK_SIZE * BLOCK_SIZE] = {0};
+// Assume there are only 16 AVX512 registers
 
-    // col-major
-    for(int j = 0; j < K; ++j){
-        for(int i = 0; i < M; ++i){
-            // M x K
-            /* A_cpy[i + j * BLOCK_SIZE]= A[i + j * lda]; */
-            // transpose
-            A_cpy[j + i * BLOCK_SIZE]= A[i + j * lda];
-        }
-    }
+// cacheline is 64 bytes -> 8 doubles
+#define CACHELINE 8
+
+#define MICRO_H 16
+// W is allowed to be not a multiple of CACHELINE
+#define MICRO_W 6
+
+void cpy(int N_pad, int N, double *from, double *to){
     for(int j = 0; j < N; ++j){
-        for(int i = 0; i < K; ++i){
-            // K x N
-            B_cpy[i + j * BLOCK_SIZE] = B[i + j * lda];
+        for(int i = 0; i < N; ++i){
+            to[i + j * N_pad] = from[i + j * N];
+        }
+        for(int i = N; i < N_pad; ++i){
+            to[i + j * N_pad] = 0;
         }
     }
-
-    // For each row i of A
-    for (int i = 0; i < BLOCK_SIZE; ++i) {
-        // For each column j of B
-        for (int j = 0; j < BLOCK_SIZE; ++j) {
-            // Compute C(i,j)
-            double cij = C[i + j * lda];
-            for (int k = 0; k < BLOCK_SIZE; ++k) {
-                cij += A_cpy[k + i * BLOCK_SIZE] * B_cpy[k + j * BLOCK_SIZE];
-            }
-            C[i + j * lda] = cij;
+    for(int j = N; j < N_pad; j++){
+        for(int i = 0; i < N_pad; i++){
+            to[i + j * N_pad] = 0;
         }
     }
 }
 
-
-static double* pack(int lda, double *A, int block_size){
-    // padding
-    int griddim = (lda + block_size - 1) / block_size;
-    double *packed = (double *) _mm_malloc(griddim * griddim * block_size * block_size * sizeof(double), 64);
-
-    memset(packed, 0, griddim * griddim * block_size * block_size * sizeof(double));
-
-    for(int j = 0; j < lda; ++j){
-        for(int i = 0; i < lda; ++i){
-            // reindex
-            int block_i = i / block_size;
-            int block_j = j / block_size;
-            int ii = i % block_size, jj = j % block_size;
-            // packed[block_i][block_j][ii][jj]
-            packed[(block_i + block_j * griddim) * (block_size * block_size) + ii + jj * block_size] = A[i + j * lda];
+void transpose_cpy(int N_pad, int N, double *from, double *to){
+    for(int j = 0; j < N; ++j){
+        for(int i = 0; i < N; ++i){
+            to[j + i * N_pad] = from[i + j * N];
+        }
+        for(int i = N; i < N_pad; ++i){
+            to[j + i * N_pad] = 0;
         }
     }
-    return packed;
+    for(int i = 0; i < N_pad; i++){
+        for(int j = N; j < N_pad; j++){
+            to[j + i * N_pad] = 0;
+        }
+    }
 }
 
-static double* pack_and_transpose(int lda, double *A, int block_size){
-    // padding
-    int griddim = (lda + block_size - 1) / block_size;
-    double *packed = (double *) _mm_malloc(griddim * griddim * block_size * block_size * sizeof(double), 64);
+// A: 16 x 1
+// B: 1 x 6 (but transposed)
+// C: 16 x 6
+static void micro_kernel_16by6(
+        int N_pad,
+        double *A_panel, double *B_panel, double *C_block
+        ){
 
-    memset(packed, 0, griddim * griddim * block_size * block_size * sizeof(double));
+for(int k = 0; k < N_pad; ++k){
+    /* N_pad, A_panel + k * N_pad, B_panel + k * N_pad, C_block */
+    double *A = A_panel + k * N_pad;
+    double *B = B_panel + k * N_pad;
+    double *C = C_block;
+/*[[[cog
+import cog
 
-    for(int j = 0; j < lda; ++j){
-        for(int i = 0; i < lda; ++i){
-            // (i, j) -> (j, i) (transpose) and then pack
-            int block_i = j / block_size;
-            int block_j = i / block_size;
-            int ii = j % block_size, jj = i % block_size;
-            // packed[block_i][block_j][ii][jj]
-            packed[(block_i + block_j * griddim) * (block_size * block_size) + ii + jj * block_size] = A[i + j * lda];
-        }
+AVX_DOUBLE_NUM = 8
+
+# block C
+for i in range(16 // AVX_DOUBLE_NUM):
+    for j in range(6):
+        cog.outl("__m512d c{}{};".format(i, j))
+
+# column of A
+for i in range(16 // AVX_DOUBLE_NUM):
+    cog.outl("__m512d a{};".format(i))
+
+# col of B (transposed)
+# we only have 2 registers remaining (we only have 16 registers)
+step = 2
+for i in range(step):
+    cog.outl("__m512d b{};".format(i))
+
+# load block C
+for j in range(6):
+    for i in range(16 // AVX_DOUBLE_NUM):
+        cog.outl("c{i}{j} = _mm512_load_pd(C + {i} * {AVX_DOUBLE_NUM} + N_pad * {j});".format(
+                i=i, j=j, AVX_DOUBLE_NUM=AVX_DOUBLE_NUM))
+
+# load A
+for i in range(16 // AVX_DOUBLE_NUM):
+    cog.outl("a{i} = _mm512_load_pd(A + {i} * {AVX_DOUBLE_NUM});".format(i=i, AVX_DOUBLE_NUM=AVX_DOUBLE_NUM))
+
+# computation!!
+for i in range(16 // AVX_DOUBLE_NUM):
+    for j in range(6 // step):
+        # tricky part: because we only have 2 registers for B
+        for k in range(step):
+            bidx = k + j * step
+            cog.outl("b{k} = _mm512_set1_pd(B[{bidx}]);".format(k=k, bidx=bidx))
+
+        for k in range(step):
+            bidx = k + j * step
+            cog.outl("c{i}{bidx} = _mm512_fmadd_pd(a{i}, b{k}, c{i}{bidx});".format(i=i,k=k,bidx=bidx))
+
+# write
+for j in range(6):
+    for i in range(16 // AVX_DOUBLE_NUM):
+        cog.outl("_mm512_store_pd(C + {i} * {AVX_DOUBLE_NUM} + N_pad * {j}, c{i}{j});".format(i=i, j=j,
+                AVX_DOUBLE_NUM=AVX_DOUBLE_NUM))
+
+
+]]]*/
+__m512d c00;
+__m512d c01;
+__m512d c02;
+__m512d c03;
+__m512d c04;
+__m512d c05;
+__m512d c10;
+__m512d c11;
+__m512d c12;
+__m512d c13;
+__m512d c14;
+__m512d c15;
+__m512d a0;
+__m512d a1;
+__m512d b0;
+__m512d b1;
+c00 = _mm512_load_pd(C + 0 * 8 + N_pad * 0);
+c10 = _mm512_load_pd(C + 1 * 8 + N_pad * 0);
+c01 = _mm512_load_pd(C + 0 * 8 + N_pad * 1);
+c11 = _mm512_load_pd(C + 1 * 8 + N_pad * 1);
+c02 = _mm512_load_pd(C + 0 * 8 + N_pad * 2);
+c12 = _mm512_load_pd(C + 1 * 8 + N_pad * 2);
+c03 = _mm512_load_pd(C + 0 * 8 + N_pad * 3);
+c13 = _mm512_load_pd(C + 1 * 8 + N_pad * 3);
+c04 = _mm512_load_pd(C + 0 * 8 + N_pad * 4);
+c14 = _mm512_load_pd(C + 1 * 8 + N_pad * 4);
+c05 = _mm512_load_pd(C + 0 * 8 + N_pad * 5);
+c15 = _mm512_load_pd(C + 1 * 8 + N_pad * 5);
+a0 = _mm512_load_pd(A + 0 * 8);
+a1 = _mm512_load_pd(A + 1 * 8);
+b0 = _mm512_set1_pd(B[0]);
+b1 = _mm512_set1_pd(B[1]);
+c00 = _mm512_fmadd_pd(a0, b0, c00);
+c01 = _mm512_fmadd_pd(a0, b1, c01);
+b0 = _mm512_set1_pd(B[2]);
+b1 = _mm512_set1_pd(B[3]);
+c02 = _mm512_fmadd_pd(a0, b0, c02);
+c03 = _mm512_fmadd_pd(a0, b1, c03);
+b0 = _mm512_set1_pd(B[4]);
+b1 = _mm512_set1_pd(B[5]);
+c04 = _mm512_fmadd_pd(a0, b0, c04);
+c05 = _mm512_fmadd_pd(a0, b1, c05);
+b0 = _mm512_set1_pd(B[0]);
+b1 = _mm512_set1_pd(B[1]);
+c10 = _mm512_fmadd_pd(a1, b0, c10);
+c11 = _mm512_fmadd_pd(a1, b1, c11);
+b0 = _mm512_set1_pd(B[2]);
+b1 = _mm512_set1_pd(B[3]);
+c12 = _mm512_fmadd_pd(a1, b0, c12);
+c13 = _mm512_fmadd_pd(a1, b1, c13);
+b0 = _mm512_set1_pd(B[4]);
+b1 = _mm512_set1_pd(B[5]);
+c14 = _mm512_fmadd_pd(a1, b0, c14);
+c15 = _mm512_fmadd_pd(a1, b1, c15);
+_mm512_store_pd(C + 0 * 8 + N_pad * 0, c00);
+_mm512_store_pd(C + 1 * 8 + N_pad * 0, c10);
+_mm512_store_pd(C + 0 * 8 + N_pad * 1, c01);
+_mm512_store_pd(C + 1 * 8 + N_pad * 1, c11);
+_mm512_store_pd(C + 0 * 8 + N_pad * 2, c02);
+_mm512_store_pd(C + 1 * 8 + N_pad * 2, c12);
+_mm512_store_pd(C + 0 * 8 + N_pad * 3, c03);
+_mm512_store_pd(C + 1 * 8 + N_pad * 3, c13);
+_mm512_store_pd(C + 0 * 8 + N_pad * 4, c04);
+_mm512_store_pd(C + 1 * 8 + N_pad * 4, c14);
+_mm512_store_pd(C + 0 * 8 + N_pad * 5, c05);
+_mm512_store_pd(C + 1 * 8 + N_pad * 5, c15);
+//[[[end]]]
     }
-    return packed;
 }
-/* This routine performs a dgemm operation
- *  C := C + A * B
- * where A, B, and C are lda-by-lda matrices stored in column-major format.
- * On exit, A and B maintain their input values. */
-/* void square_dgemm(int lda, double* A, double* B, double* C) { */
-/*     // For each block-row of A */
-/*     for (int i = 0; i < lda; i += BLOCK_SIZE) { */
-/*         // For each block-column of B */
-/*         for (int j = 0; j < lda; j += BLOCK_SIZE) { */
-/*             // Accumulate block dgemms into block of C */
-/*             for (int k = 0; k < lda; k += BLOCK_SIZE) { */
-/*                 // Correct block dimensions if block "goes off edge of" the matrix */
-/*                 int M = min(BLOCK_SIZE, lda - i); */
-/*                 int N = min(BLOCK_SIZE, lda - j); */
-/*                 int K = min(BLOCK_SIZE, lda - k); */
-/*                 // Perform individual block dgemm */
-/*                 do_block_fixsize(lda, M, N, K, A + i + k * lda, B + k + j * lda, C + i + j * lda); */
-/*             } */
-/*         } */
-/*     } */
-/* } */
 
-void square_dgemm(int lda, double* A, double* B, double* C) {
-    // Copy A, B, C in contiguous format
-    double *A_packed_trans = pack_and_transpose(lda, A, BLOCK_SIZE);
-    double *B_packed = pack(lda, B, BLOCK_SIZE);
-    double *C_packed = pack(lda, C, BLOCK_SIZE);
+int gcd(int a, int b){
+    int t;
+    while(b != 0){
+        t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
 
-    // Use CUDA naming convention
-    int griddim = (lda + BLOCK_SIZE - 1) / BLOCK_SIZE;
+int lcm(int a, int b){
+    return a / gcd(a, b) * b;
+}
 
-    // Loop over each block of C
-    for(int bj = 0; bj < griddim; ++bj){
-        for(int bi = 0; bi < griddim; ++bi){
-            // Loop over the bi column of A_packed_trans
-            // Loop over the bj column of B_packed
-            for(int bk = 0; bk < griddim; ++bk){
-                // A -> (bk, bi) (because of already transposed)
-                // originally it is the bi's block row
-                double *A_block = A_packed_trans + (bk + bi * griddim) * BLOCK_SIZE * BLOCK_SIZE;
-                // B -> (bk, bj)
-                double *B_block = B_packed + (bk + bj * griddim) * BLOCK_SIZE * BLOCK_SIZE;
-                // C -> (bi, bj)
-                double *C_block = C_packed + (bi + bj * griddim) * BLOCK_SIZE * BLOCK_SIZE;
-                // small block matrix multiplication
-                for(int j = 0; j < BLOCK_SIZE; ++j){
-                    for(int i = 0; i < BLOCK_SIZE; ++i){
-                        double c = 0.;
-                        for(int k = 0; k < BLOCK_SIZE; k += 8){
-                            // (i, k) * (k, j)
-                            // but because of transpose -> (k, i) * (k, j)
-                            // SIMD
-                            __m512d Ar;
-                            __m512d Br;
-                            __m512d Cr;
-                            Ar = _mm512_load_pd(A_block + k + i * BLOCK_SIZE);
-                            Br = _mm512_load_pd(B_block + k + j * BLOCK_SIZE);
-                            Cr = _mm512_mul_pd(Ar, Br);
-                            c += _mm512_reduce_add_pd(Cr);
-                        }
-                        C_block[i + j * BLOCK_SIZE] += c;
-                    }
-                }
-            }
+void square_dgemm(int N, double* A, double* B, double* C) {
+    // make N_pad a multiple of 8
+    /* int N_pad = ((N + CACHELINE - 1) / CACHELINE) * CACHELINE; */
+    int lcm_hw = lcm(MICRO_H, MICRO_W);
+    assert(lcm_hw % CACHELINE == 0);
+
+    int N_pad = ((N + lcm_hw - 1) / lcm_hw) * lcm_hw;
+    assert(N_pad % MICRO_W == 0);
+    assert(N_pad % MICRO_H == 0);
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    // copy A
+    cpy(N_pad, N, A, A_align);
+    // transpose copy B
+    transpose_cpy(N_pad, N, B, B_align);
+    // copy C
+    cpy(N_pad, N, C, C_align);
+
+    for(int j = 0; j < N_pad; j += MICRO_W){
+        for(int i = 0; i < N_pad; i += MICRO_H){
+            // row panel
+            double *A_panel = A_align + i;
+            double *B_panel = B_align + j;
+
+            double *C_block = C_align + i + j * N_pad;
+
+            // Compute the block for C using
+            // the sum of outer product of A's column and B's column(transposed)
+            micro_kernel_16by6(N_pad, A_panel, B_panel, C_block);
         }
     }
-    // Copy C_packed back to C
-    for(int j = 0; j < lda; ++j){
-        for(int i = 0; i < lda; ++i){
-            int block_i = i / BLOCK_SIZE;
-            int block_j = j / BLOCK_SIZE;
-            int ii = i % BLOCK_SIZE, jj = j % BLOCK_SIZE;
-            C[i + j * lda] = C_packed[
-                (block_i + block_j * griddim) * BLOCK_SIZE * BLOCK_SIZE + ii + jj * BLOCK_SIZE];
+
+    // copy C back
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
         }
     }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
 }
