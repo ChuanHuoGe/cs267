@@ -1,12 +1,13 @@
 #include <immintrin.h>
 
-
-const char* dgemm_desc = "Blocking";
-
 #define CACHELINE 8
 #define BLOCK_SIZE 32
 
+#define STRINGIFY2(X) #X
+#define STRINGIFY(X) STRINGIFY2(X)
 #define EXPERIMENT 2
+
+const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) "";
 
 inline void cpy(int N_pad, int N, double *from, double *to){
     for(int j = 0; j < N; ++j){
@@ -38,16 +39,6 @@ inline void transpose_cpy(int N_pad, int N, double *from, double *to){
             to[j + i * N_pad] = 0;
         }
     }
-}
-// entry point
-void square_dgemm(int N, double* A, double* B, double* C) {
-#if EXPERIMENT == 1
-    square_dgemm_block_jik(N, A, B, C);
-#elif EXPERIMENT == 2
-    square_dgemm_block_kji(N, A, B, C);
-#else
-    assert(0);
-#endif
 }
 void square_dgemm_block_jik(int N, double* A, double* B, double* C) {
 
@@ -155,4 +146,14 @@ void square_dgemm_block_kji(int N, double* A, double* B, double* C) {
     _mm_free(A_align);
     _mm_free(B_align);
     _mm_free(C_align);
+}
+// entry point
+void square_dgemm(int N, double* A, double* B, double* C) {
+#if EXPERIMENT == 1
+    square_dgemm_block_jik(N, A, B, C);
+#elif EXPERIMENT == 2
+    square_dgemm_block_kji(N, A, B, C);
+#else
+    assert(0);
+#endif
 }
