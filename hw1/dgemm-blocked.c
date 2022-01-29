@@ -5,7 +5,7 @@
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 2
+#define EXPERIMENT 3
 
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) "";
 
@@ -147,12 +147,69 @@ void square_dgemm_block_kji(int N, double* A, double* B, double* C) {
     _mm_free(B_align);
     _mm_free(C_align);
 }
+void square_dgemm_jki_block_jki(int N, double* A, double* B, double* C) {
+    int N_pad = (N + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    cpy(N_pad, N, A, A_align);
+    cpy(N_pad, N, B, B_align);
+    cpy(N_pad, N, C, C_align);
+
+    for(int j = 0; j < N_pad; j += BLOCK_SIZE){
+        for(int k = 0; k < N_pad; k += BLOCK_SIZE){
+            for(int i = 0; i < N_pad; i += BLOCK_SIZE){
+                // read: A_align[i:i+BLOCK_SIZE][k:k+BLOCK_SIZE]
+                // read: B_align[k:k+BLOCK_SIZE][j:j+BLOCK_SIZE]
+                // read&write: C_align[i:i+BLOCK_SIZE][j:j+BLOCK_SIZE]
+                double *A_block = A_align + i + k * N_pad;
+                double *B_block = B_align + k + j * N_pad;
+                double *C_block = C_align + i + j * N_pad;
+                __m512d a,b,c;
+                for(int jj = 0; jj < BLOCK_SIZE; ++jj){
+                    double *B_col = B_block + jj * N_pad;
+                    double *C_col = C_block + jj * N_pad;
+
+                    for(int kk = 0; kk < BLOCK_SIZE; ++kk){
+                        double *A_col = A_block + kk * N_pad;
+                        double *B_element = B_col + kk;
+
+                        for(int ii = 0; ii < BLOCK_SIZE; ii += CACHELINE){
+                            a = _mm512_load_pd(A_col + ii);
+                            b = _mm512_set1_pd(B_element[0]);
+                            c = _mm512_load_pd(C_col + ii);
+                            c = _mm512_fmadd_pd(a, b, c);
+                            _mm512_store_pd(C_col + ii, c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // put back
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
+        }
+    }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
+}
 // entry point
 void square_dgemm(int N, double* A, double* B, double* C) {
 #if EXPERIMENT == 1
+    // about 19%
     square_dgemm_block_jik(N, A, B, C);
 #elif EXPERIMENT == 2
+    // about 12%
     square_dgemm_block_kji(N, A, B, C);
+#elif EXPERIMENT == 3
+    // about 22%
+    square_dgemm_jki_block_jki(N, A, B, C);
 #else
     assert(0);
 #endif
