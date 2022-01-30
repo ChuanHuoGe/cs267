@@ -1,11 +1,12 @@
 #include <immintrin.h>
+#include <assert.h>
 
 #define CACHELINE 8
 #define BLOCK_SIZE 32
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 8
+#define EXPERIMENT 9
 
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE);
 
@@ -564,6 +565,83 @@ _mm512_store_pd(C_col + ii + 3 * CACHELINE, c3);
     _mm_free(B_align);
     _mm_free(C_align);
 }
+
+#undef BLOCK_SIZE
+// aim for L2
+#define BLOCK_SIZE 64
+// aim for L1
+#define BLOCK_SIZE2 32
+
+void square_dgemm_jki_block_jki_two_level(int N, double* A, double* B, double* C) {
+    assert(BLOCK_SIZE * BLOCK_SIZE2 == 0);
+
+    int N_pad = (N + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    cpy(N_pad, N, A, A_align);
+    cpy(N_pad, N, B, B_align);
+    cpy(N_pad, N, C, C_align);
+
+    for(int j = 0; j < N_pad; j += BLOCK_SIZE){
+        for(int k = 0; k < N_pad; k += BLOCK_SIZE){
+            for(int i = 0; i < N_pad; i += BLOCK_SIZE){
+                // read: A_align[i:i+BLOCK_SIZE][k:k+BLOCK_SIZE]
+                // read: B_align[k:k+BLOCK_SIZE][j:j+BLOCK_SIZE]
+                // read&write: C_align[i:i+BLOCK_SIZE][j:j+BLOCK_SIZE]
+                double *A_block = A_align + i + k * N_pad;
+                double *B_block = B_align + k + j * N_pad;
+                double *C_block = C_align + i + j * N_pad;
+                for(int jj = 0; jj < BLOCK_SIZE; jj += BLOCK_SIZE2){
+                    for(int kk = 0; kk < BLOCK_SIZE; kk += BLOCK_SIZE2){
+                        for(int ii = 0; ii < BLOCK_SIZE; ii += BLOCK_SIZE2){
+                            double *A_block2 = A_block + ii + kk * N_pad;
+                            double *B_block2 = B_block + kk + jj * N_pad;
+                            double *C_block2 = C_block + ii + jj * N_pad;
+
+
+                            for(int jjj = 0; jjj < BLOCK_SIZE2; ++jjj){
+                                double *B_col = B_block2 + jjj * N_pad;
+                                double *C_col = C_block2 + jjj * N_pad;
+
+                                for(int kkk = 0; kkk < BLOCK_SIZE2; ++kkk){
+                                    double *A_col = A_block2 + kkk * N_pad;
+                                    double *B_element = B_col + kkk;
+
+                                    for(int iii = 0; iii < BLOCK_SIZE2; iii += CACHELINE){
+                                        __m512d a,b,c;
+                                        a = _mm512_load_pd(A_col + iii);
+                                        b = _mm512_set1_pd(B_element[0]);
+                                        c = _mm512_load_pd(C_col + iii);
+                                        c = _mm512_fmadd_pd(a, b, c);
+                                        _mm512_store_pd(C_col + iii, c);
+                                    }
+                                }
+                            }
+
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // put back
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
+        }
+    }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
+}
+#undef BLOCK_SIZE
+#define BLOCK_SIZE 32
+//----------------------------------------
+//
 // entry point
 void square_dgemm(int N, double* A, double* B, double* C) {
 #if EXPERIMENT == 1
@@ -590,6 +668,9 @@ void square_dgemm(int N, double* A, double* B, double* C) {
 #elif EXPERIMENT == 8
     // about 22%
     square_dgemm_jki_block_jki_unroll(N, A, B, C);
+#elif EXPERIMENT == 9
+    // about 20% (weird...)
+    square_dgemm_jki_block_jki_two_level(N, A, B, C);
 #else
     assert(0);
 #endif
