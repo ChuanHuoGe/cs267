@@ -6,7 +6,8 @@
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 10
+#define EXPERIMENT 9
+#define min(a, b) (((a) < (b)) ? (a) : (b))
 
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE);
 
@@ -568,14 +569,14 @@ _mm512_store_pd(C_col + ii + 3 * CACHELINE, c3);
 
 #undef BLOCK_SIZE
 // aim for L2
-#define BLOCK_SIZE 64
+#define BLOCK_SIZE 160
 // aim for L1
 #define BLOCK_SIZE2 32
 
 void square_dgemm_jki_block_jki_two_level(int N, double* A, double* B, double* C) {
     assert(BLOCK_SIZE * BLOCK_SIZE2 == 0);
 
-    int N_pad = (N + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+    int N_pad = (N + BLOCK_SIZE2 - 1) / BLOCK_SIZE2 * BLOCK_SIZE2;
 
     double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
     double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
@@ -588,15 +589,18 @@ void square_dgemm_jki_block_jki_two_level(int N, double* A, double* B, double* C
     for(int j = 0; j < N_pad; j += BLOCK_SIZE){
         for(int k = 0; k < N_pad; k += BLOCK_SIZE){
             for(int i = 0; i < N_pad; i += BLOCK_SIZE){
+                int I = min(N_pad - i, BLOCK_SIZE);
+                int J = min(N_pad - j, BLOCK_SIZE);
+                int K = min(N_pad - k, BLOCK_SIZE);
                 // read: A_align[i:i+BLOCK_SIZE][k:k+BLOCK_SIZE]
                 // read: B_align[k:k+BLOCK_SIZE][j:j+BLOCK_SIZE]
                 // read&write: C_align[i:i+BLOCK_SIZE][j:j+BLOCK_SIZE]
                 double *A_block = A_align + i + k * N_pad;
                 double *B_block = B_align + k + j * N_pad;
                 double *C_block = C_align + i + j * N_pad;
-                for(int jj = 0; jj < BLOCK_SIZE; jj += BLOCK_SIZE2){
-                    for(int kk = 0; kk < BLOCK_SIZE; kk += BLOCK_SIZE2){
-                        for(int ii = 0; ii < BLOCK_SIZE; ii += BLOCK_SIZE2){
+                for(int jj = 0; jj < J; jj += BLOCK_SIZE2){
+                    for(int kk = 0; kk < K; kk += BLOCK_SIZE2){
+                        for(int ii = 0; ii < I; ii += BLOCK_SIZE2){
                             double *A_block2 = A_block + ii + kk * N_pad;
                             double *B_block2 = B_block + kk + jj * N_pad;
                             double *C_block2 = C_block + ii + jj * N_pad;
@@ -699,7 +703,6 @@ void square_dgemm_jki_block_jki_prefetch(int N, double* A, double* B, double* C)
     _mm_free(C_align);
 }
 //----------------------------------------
-#define min(a, b) (((a) < (b)) ? (a) : (b))
 void square_dgemm_jki_block_jki_nopad(int N, double* A, double* B, double* C) {
     int N_pad = (N + BLOCK_SIZE - 1) / CACHELINE * CACHELINE;
 
