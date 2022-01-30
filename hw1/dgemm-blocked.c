@@ -6,7 +6,7 @@
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 9
+#define EXPERIMENT 2
 
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE);
 
@@ -41,7 +41,7 @@ inline void transpose_cpy(int N_pad, int N, double *from, double *to){
         }
     }
 }
-void square_dgemm_block_jik(int N, double* A, double* B, double* C) {
+void square_dgemm_block_jki(int N, double* A, double* B, double* C) {
 
     int N_pad = (N + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
 
@@ -646,7 +646,7 @@ void square_dgemm_jki_block_jki_two_level(int N, double* A, double* B, double* C
 void square_dgemm(int N, double* A, double* B, double* C) {
 #if EXPERIMENT == 1
     // about 19%
-    square_dgemm_block_jik(N, A, B, C);
+    square_dgemm_block_jki(N, A, B, C);
 #elif EXPERIMENT == 2
     // about 12%
     square_dgemm_block_kji(N, A, B, C);
