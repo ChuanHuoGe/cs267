@@ -6,7 +6,7 @@
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 9
+#define EXPERIMENT 14
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE);
@@ -762,6 +762,215 @@ void square_dgemm_jki_block_jki_nopad(int N, double* A, double* B, double* C) {
     _mm_free(B_align);
     _mm_free(C_align);
 }
+
+#define KC 256
+#define MC 256
+#define NR 32
+#define MR 32
+void square_dgemm_gotoblas_block_jki(int N, double* A, double* B, double* C) {
+    assert(NR == MR);
+    assert(NR % CACHELINE == 0);
+    int N_pad = (N + MR - 1) / MR * MR;
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    cpy(N_pad, N, A, A_align);
+    cpy(N_pad, N, B, B_align);
+    cpy(N_pad, N, C, C_align);
+
+    for(int pc = 0; pc < N_pad; pc += KC){
+        int K = min(N_pad - pc, KC);
+        /* assert(K % NR == 0); */
+        for(int ic = 0; ic < N_pad; ic += MC){
+            int IR = min(N_pad - ic, MC);
+            /* assert(IR % NR == 0); */
+            for(int jr = 0; jr < N_pad; jr += NR){
+                for(int ir = 0; ir < IR; ir += MR){
+                    // A_align[ic+ir:ic+ir+MR][pc:pc+K]
+                    // B_align[pc:pc+K][jr:jr+NR]
+                    // C_align[ic+ir:ic+ir+MR][jr:jr+NR]
+                    double *const A_sliver = A_align + (ic + ir) + (pc) * N_pad;
+                    double *const B_sliver = B_align + (pc) + (jr) * N_pad;
+                    double *const C_block = C_align + (ic + ir) + (jr) * N_pad;
+                    // (MR x K) x (K x NR)
+                    __m512d a,b,c;
+                    for(int j = 0; j < NR; ++j){
+                        double *const B_col = B_sliver + j * N_pad;
+                        double *const C_col = C_block + j * N_pad;
+                        for(int k = 0; k < K; ++k){
+                            double *const B_element = B_col + k;
+                            double *const A_col = A_sliver + k * N_pad;
+                            for(int i = 0; i < MR; i += CACHELINE){
+                                a = _mm512_load_pd(A_col + i);
+                                b = _mm512_set1_pd(B_element[0]);
+                                c = _mm512_load_pd(C_col + i);
+                                c = _mm512_fmadd_pd(a, b, c);
+                                _mm512_store_pd(C_col + i, c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // put back
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
+        }
+    }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
+}
+void square_dgemm_gotoblas_block_kji(int N, double* A, double* B, double* C) {
+    assert(NR == MR);
+    assert(NR % CACHELINE == 0);
+    int N_pad = (N + MR - 1) / MR * MR;
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    cpy(N_pad, N, A, A_align);
+    cpy(N_pad, N, B, B_align);
+    cpy(N_pad, N, C, C_align);
+
+    for(int pc = 0; pc < N_pad; pc += KC){
+        int K = min(N_pad - pc, KC);
+        /* assert(K % NR == 0); */
+        for(int ic = 0; ic < N_pad; ic += MC){
+            int IR = min(N_pad - ic, MC);
+            /* assert(IR % NR == 0); */
+            for(int jr = 0; jr < N_pad; jr += NR){
+                for(int ir = 0; ir < IR; ir += MR){
+                    // A_align[ic+ir:ic+ir+MR][pc:pc+K]
+                    // B_align[pc:pc+K][jr:jr+NR]
+                    // C_align[ic+ir:ic+ir+MR][jr:jr+NR]
+                    double *const A_sliver = A_align + (ic + ir) + (pc) * N_pad;
+                    double *const B_sliver = B_align + (pc) + (jr) * N_pad;
+                    double *const C_block = C_align + (ic + ir) + (jr) * N_pad;
+                    // (MR x K) x (K x NR)
+                    __m512d a,b,c;
+                    for(int k = 0; k < K; ++k){
+                        double *const B_row = B_sliver + k;
+                        double *const A_col = A_sliver + k * N_pad;
+
+                        for(int j = 0; j < NR; ++j){
+                            double *const C_col = C_block + j * N_pad;
+                            double *const B_element = B_row + j * N_pad;
+
+                            for(int i = 0; i < MR; i += CACHELINE){
+                                a = _mm512_load_pd(A_col + i);
+                                b = _mm512_set1_pd(B_element[0]);
+                                c = _mm512_load_pd(C_col + i);
+                                c = _mm512_fmadd_pd(a, b, c);
+                                _mm512_store_pd(C_col + i, c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // put back
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
+        }
+    }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
+}
+
+// Check https://www.cs.utexas.edu/users/flame/pubs/blis3_ipdps14.pdf
+void square_dgemm_gotoblas_block_kji_packing(int N, double* A, double* B, double* C) {
+    assert(NR == MR);
+    assert(NR % CACHELINE == 0);
+    int N_pad = (N + MR - 1) / MR * MR;
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    cpy(N_pad, N, A, A_align);
+    cpy(N_pad, N, B, B_align);
+    cpy(N_pad, N, C, C_align);
+
+    double *A_pack = (double *)_mm_malloc(MC * KC * sizeof(double), CACHELINE * sizeof(double));
+    double *B_pack = (double *)_mm_malloc(KC * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    for(int pc = 0; pc < N_pad; pc += KC){
+        int K = min(N_pad - pc, KC);
+        for(int ic = 0; ic < N_pad; ic += MC){
+            int IR = min(N_pad - ic, MC);
+
+            // pack A
+            for(int j = 0; j < K; ++j){
+                for(int i = 0; i < IR; ++i){
+                    A_pack[(i / MR) * MR * K + (i % MR) + j * MR] = A_align[(ic + i) + (pc + j) * N_pad];
+                }
+            }
+            // pack B
+            for(int j = 0; j < N_pad; ++j){
+                for(int i = 0; i < K; ++i){
+                    B_pack[(j / NR) * K * NR + (i * NR + j % NR)] = B_align[(pc + i) + (j) * N_pad];
+                }
+            }
+
+            for(int jr = 0; jr < N_pad; jr += NR){
+                for(int ir = 0; ir < IR; ir += MR){
+                    // A_align[ic+ir:ic+ir+MR][pc:pc+K]
+                    // B_align[pc:pc+K][jr:jr+NR]
+                    // C_align[ic+ir:ic+ir+MR][jr:jr+NR]
+
+                    double *const A_sliver = A_pack + (ir / MR) * MR * K;
+                    double *const B_sliver = B_pack + (jr / NR) * K * NR;
+                    double *const C_block = C_align + (ic + ir) + (jr) * N_pad;
+                    // (MR x K) x (K x NR)
+                    __m512d a,b,c;
+                    for(int k = 0; k < K; ++k){
+                        double *const B_row = B_sliver + k * NR;
+                        double *const A_col = A_sliver + k * MR;
+
+                        for(int j = 0; j < NR; ++j){
+                            double *const C_col = C_block + j * N_pad;
+                            double *const B_element = B_row + j;
+
+                            for(int i = 0; i < MR; i += CACHELINE){
+                                a = _mm512_load_pd(A_col + i);
+                                b = _mm512_set1_pd(B_element[0]);
+                                c = _mm512_load_pd(C_col + i);
+                                c = _mm512_fmadd_pd(a, b, c);
+                                _mm512_store_pd(C_col + i, c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // put back
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
+        }
+    }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
+    _mm_free(A_pack);
+    _mm_free(B_pack);
+}
 //
 // entry point
 void square_dgemm(int N, double* A, double* B, double* C) {
@@ -798,6 +1007,15 @@ void square_dgemm(int N, double* A, double* B, double* C) {
 #elif EXPERIMENT == 11
     // about 9.51%
     square_dgemm_jki_block_jki_nopad(N, A, B, C);
+#elif EXPERIMENT == 12
+    // about 18%
+    square_dgemm_gotoblas_block_jki(N, A, B, C);
+#elif EXPERIMENT == 13
+    // about 13%
+    square_dgemm_gotoblas_block_kji(N, A, B, C);
+#elif EXPERIMENT == 14
+    // about 13%
+    square_dgemm_gotoblas_block_kji_packing(N, A, B, C);
 #else
     assert(0);
 #endif
