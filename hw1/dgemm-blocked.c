@@ -2,11 +2,11 @@
 #include <assert.h>
 
 #define CACHELINE 8
-#define BLOCK_SIZE 32
+#define BLOCK_SIZE 48
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 14
+#define EXPERIMENT 8
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE);
@@ -14,6 +14,26 @@ const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_
 inline void cpy(int N_pad, int N, double *from, double *to){
     for(int j = 0; j < N; ++j){
         for(int i = 0; i < N; ++i){
+            to[i + j * N_pad] = from[i + j * N];
+        }
+        for(int i = N; i < N_pad; ++i){
+            to[i + j * N_pad] = 0;
+        }
+    }
+    for(int j = N; j < N_pad; j++){
+        for(int i = 0; i < N_pad; i++){
+            to[i + j * N_pad] = 0;
+        }
+    }
+}
+inline void cpy_avx(int N_pad, int N, double *from, double *to){
+    for(int j = 0; j < N; ++j){
+        int remainder = N % CACHELINE;
+        for(int i = 0; i < N - remainder; i += CACHELINE){
+            __m512d l = _mm512_loadu_pd(from + i + j * N);
+            _mm512_store_pd(to + i + j * N_pad, l);
+        }
+        for(int i = N - remainder; i < N; ++i){
             to[i + j * N_pad] = from[i + j * N];
         }
         for(int i = N; i < N_pad; ++i){
@@ -441,7 +461,7 @@ void square_dgemm_jki_block_jki_packing(int N, double* A, double* B, double* C) 
     _mm_free(C_align);
 }
 
-#define UNROLLSTEP 4
+#define UNROLLSTEP 6
 
 void square_dgemm_jki_block_jki_unroll(int N, double* A, double* B, double* C) {
     int N_pad = (N + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
@@ -471,20 +491,50 @@ void square_dgemm_jki_block_jki_unroll(int N, double* A, double* B, double* C) {
                         double *A_col = A_block + kk * N_pad;
                         double *B_element = B_col + kk;
 
+/*[[[cog
+import cog
+
+UNROLLSTEP = 6
+CACHELINE = 8
+
+# define
+cog.out(
+    """
+                            __m512d b;
+                            b = _mm512_set1_pd(B_element[0]);
+    """
+)
+for i in range(UNROLLSTEP):
+    cog.out(
+    """
+    """.format(i=i))
+]]]*/
+
+__m512d b;
+b = _mm512_set1_pd(B_element[0]);
+    
+    
+    
+    
+    
+    
+    
+//[[[end]]]
+
                         for(int ii = 0; ii < BLOCK_SIZE; ii += UNROLLSTEP * CACHELINE){
 /*[[[cog
 import cog
 
-UNROLLSTEP = 4
+UNROLLSTEP = 6
 CACHELINE = 8
 
 # define
-for i in range(UNROLLSTEP):
-    cog.out(
-    """
-                            __m512d b{i};
-                            b{i} = _mm512_set1_pd(B_element[0]);
-    """.format(i=i))
+# for i in range(UNROLLSTEP):
+#     cog.out(
+#     """
+#                             __m512d b{i};
+#                             b{i} = _mm512_set1_pd(B_element[0]);
+#     """.format(i=i))
 
 for i in range(UNROLLSTEP):
     cog.out(
@@ -498,24 +548,12 @@ for i in range(UNROLLSTEP):
     """
                             a{i} = _mm512_load_pd(A_col + ii + {i} * CACHELINE);
                             c{i} = _mm512_load_pd(C_col + ii + {i} * CACHELINE);
-                            c{i} = _mm512_fmadd_pd(a{i}, b{i}, c{i});
+                            c{i} = _mm512_fmadd_pd(a{i}, b, c{i});
                             _mm512_store_pd(C_col + ii + {i} * CACHELINE, c{i});
     """.format(i=i))
 
 ]]]*/
 
-__m512d b0;
-b0 = _mm512_set1_pd(B_element[0]);
-    
-__m512d b1;
-b1 = _mm512_set1_pd(B_element[0]);
-    
-__m512d b2;
-b2 = _mm512_set1_pd(B_element[0]);
-    
-__m512d b3;
-b3 = _mm512_set1_pd(B_element[0]);
-    
 __m512d a0;
 __m512d c0;
     
@@ -528,25 +566,41 @@ __m512d c2;
 __m512d a3;
 __m512d c3;
     
+__m512d a4;
+__m512d c4;
+    
+__m512d a5;
+__m512d c5;
+    
 a0 = _mm512_load_pd(A_col + ii + 0 * CACHELINE);
 c0 = _mm512_load_pd(C_col + ii + 0 * CACHELINE);
-c0 = _mm512_fmadd_pd(a0, b0, c0);
+c0 = _mm512_fmadd_pd(a0, b, c0);
 _mm512_store_pd(C_col + ii + 0 * CACHELINE, c0);
     
 a1 = _mm512_load_pd(A_col + ii + 1 * CACHELINE);
 c1 = _mm512_load_pd(C_col + ii + 1 * CACHELINE);
-c1 = _mm512_fmadd_pd(a1, b1, c1);
+c1 = _mm512_fmadd_pd(a1, b, c1);
 _mm512_store_pd(C_col + ii + 1 * CACHELINE, c1);
     
 a2 = _mm512_load_pd(A_col + ii + 2 * CACHELINE);
 c2 = _mm512_load_pd(C_col + ii + 2 * CACHELINE);
-c2 = _mm512_fmadd_pd(a2, b2, c2);
+c2 = _mm512_fmadd_pd(a2, b, c2);
 _mm512_store_pd(C_col + ii + 2 * CACHELINE, c2);
     
 a3 = _mm512_load_pd(A_col + ii + 3 * CACHELINE);
 c3 = _mm512_load_pd(C_col + ii + 3 * CACHELINE);
-c3 = _mm512_fmadd_pd(a3, b3, c3);
+c3 = _mm512_fmadd_pd(a3, b, c3);
 _mm512_store_pd(C_col + ii + 3 * CACHELINE, c3);
+    
+a4 = _mm512_load_pd(A_col + ii + 4 * CACHELINE);
+c4 = _mm512_load_pd(C_col + ii + 4 * CACHELINE);
+c4 = _mm512_fmadd_pd(a4, b, c4);
+_mm512_store_pd(C_col + ii + 4 * CACHELINE, c4);
+    
+a5 = _mm512_load_pd(A_col + ii + 5 * CACHELINE);
+c5 = _mm512_load_pd(C_col + ii + 5 * CACHELINE);
+c5 = _mm512_fmadd_pd(a5, b, c5);
+_mm512_store_pd(C_col + ii + 5 * CACHELINE, c5);
     
 //[[[end]]]
                         }
@@ -643,7 +697,7 @@ void square_dgemm_jki_block_jki_two_level(int N, double* A, double* B, double* C
     _mm_free(C_align);
 }
 #undef BLOCK_SIZE
-#define BLOCK_SIZE 32
+#define BLOCK_SIZE 48
 
 #define PREFETCH_DIST 8
 
@@ -704,7 +758,7 @@ void square_dgemm_jki_block_jki_prefetch(int N, double* A, double* B, double* C)
 }
 //----------------------------------------
 void square_dgemm_jki_block_jki_nopad(int N, double* A, double* B, double* C) {
-    int N_pad = (N + BLOCK_SIZE - 1) / CACHELINE * CACHELINE;
+    int N_pad = (N + CACHELINE - 1) / CACHELINE * CACHELINE;
 
     double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
     double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
@@ -981,7 +1035,7 @@ void square_dgemm(int N, double* A, double* B, double* C) {
     // about 12%
     square_dgemm_block_kji(N, A, B, C);
 #elif EXPERIMENT == 3
-    // about 22%
+    // about 22% -> 26%(BLOCK_SIZE = 48)
     square_dgemm_jki_block_jki(N, A, B, C);
 #elif EXPERIMENT == 4
     // about 20.5%
@@ -996,7 +1050,7 @@ void square_dgemm(int N, double* A, double* B, double* C) {
     // about 20.8%
     square_dgemm_jki_block_jki_packing(N, A, B, C);
 #elif EXPERIMENT == 8
-    // about 22%
+    // about 22% -> 26.44(BLOCK_SIZE = 48)
     square_dgemm_jki_block_jki_unroll(N, A, B, C);
 #elif EXPERIMENT == 9
     // about 20% (weird...)
