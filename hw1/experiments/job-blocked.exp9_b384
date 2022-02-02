@@ -1,0 +1,29 @@
+Description:	Blocking experiment: 9, block_size: 384, block_size2: 48
+
+Size: 31	Mflops/s: 2404.48	Percentage: 5.37
+Size: 32	Mflops/s: 2574.73	Percentage: 5.75
+Size: 96	Mflops/s: 14551.22	Percentage: 32.48
+Size: 97	Mflops/s: 5186.77	Percentage: 11.58
+Size: 127	Mflops/s: 11190.21	Percentage: 24.98
+Size: 128	Mflops/s: 11727.31	Percentage: 26.18
+Size: 129	Mflops/s: 11287.15	Percentage: 25.19
+Size: 191	Mflops/s: 12671.02	Percentage: 28.28
+Size: 192	Mflops/s: 13646.36	Percentage: 30.46
+Size: 229	Mflops/s: 11530.33	Percentage: 25.74
+Size: 255	Mflops/s: 9747.69	Percentage: 21.76
+Size: 256	Mflops/s: 9936.75	Percentage: 22.18
+Size: 257	Mflops/s: 9873.42	Percentage: 22.04
+Size: 319	Mflops/s: 11961.42	Percentage: 26.70
+Size: 320	Mflops/s: 12142.40	Percentage: 27.10
+Size: 321	Mflops/s: 12042.49	Percentage: 26.88
+Size: 417	Mflops/s: 12560.18	Percentage: 28.04
+Size: 479	Mflops/s: 13984.81	Percentage: 31.22
+Size: 480	Mflops/s: 14283.78	Percentage: 31.88
+Size: 511	Mflops/s: 13193.95	Percentage: 29.45
+Size: 512	Mflops/s: 13315.80	Percentage: 29.72
+Size: 639	Mflops/s: 12164.09	Percentage: 27.15
+Size: 640	Mflops/s: 12263.68	Percentage: 27.37
+Size: 767	Mflops/s: 9994.95	Percentage: 22.31
+Size: 768	Mflops/s: 10079.29	Percentage: 22.50
+Size: 769	Mflops/s: 11266.33	Percentage: 25.15
+Average percentage of Peak = 24.52

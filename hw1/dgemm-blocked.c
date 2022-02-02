@@ -9,7 +9,9 @@
 #define EXPERIMENT 3
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 
+#if EXPERIMENT != 9
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE);
+#endif
 
 inline void cpy(int N_pad, int N, double *from, double *to){
     for(int j = 0; j < N; ++j){
@@ -661,6 +663,10 @@ _mm512_store_pd(C_col + ii + 5 * CACHELINE, c5);
 #define BLOCK_SIZE 160
 // aim for L1
 #define BLOCK_SIZE2 48
+
+#if EXPERIMENT == 9
+const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE) ", block_size2: " STRINGIFY(BLOCK_SIZE2);
+#endif
 
 void square_dgemm_jki_block_jki_two_level(int N, double* A, double* B, double* C) {
     assert(BLOCK_SIZE % BLOCK_SIZE2 == 0);
