@@ -6,7 +6,7 @@
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 8
+#define EXPERIMENT 3
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 
 const char* dgemm_desc = "Blocking experiment: " STRINGIFY(EXPERIMENT) ", block_size: " STRINGIFY(BLOCK_SIZE);
@@ -62,6 +62,41 @@ inline void transpose_cpy(int N_pad, int N, double *from, double *to){
         }
     }
 }
+
+void square_dgemm_starter_code_modified(int lda, double* A, double* B, double* C){
+    for(int i = 0; i < lda; i += BLOCK_SIZE){
+        for(int j = 0; j < lda; j += BLOCK_SIZE){
+            for(int k = 0; k < lda; k += BLOCK_SIZE){
+                // read: A_align[i:i+BLOCK_SIZE][k:k+BLOCK_SIZE]
+                // read: B_align[k:k+BLOCK_SIZE][j:j+BLOCK_SIZE]
+                // read&write: C_align[i:i+BLOCK_SIZE][j:j+BLOCK_SIZE]
+                int M = min(BLOCK_SIZE, lda - i);
+                int N = min(BLOCK_SIZE, lda - j);
+                int K = min(BLOCK_SIZE, lda - k);
+
+                double *A_block = A + i + k * lda;
+                double *B_block = B + k + j * lda;
+                double *C_block = C + i + j * lda;
+
+				for(int ii = 0; ii < M; ++ii){
+                    double *A_row = A_block + ii;
+                    double *C_col = C_block + ii;
+
+					for(int jj = 0; jj < N; ++jj){
+                        double *B_col = B_block + jj * lda;
+                        double *C_element = C_col + jj * lda;
+                        double c = 0;
+						for(int kk = 0; kk < K; ++kk){
+                            c += A_row[kk * lda] * B_col[kk];
+                        }
+                        *C_element += c;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void square_dgemm_block_jki(int N, double* A, double* B, double* C) {
 
     int N_pad = (N + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
@@ -1028,7 +1063,9 @@ void square_dgemm_gotoblas_block_kji_packing(int N, double* A, double* B, double
 //
 // entry point
 void square_dgemm(int N, double* A, double* B, double* C) {
-#if EXPERIMENT == 1
+#if EXPERIMENT == 0
+    square_dgemm_starter_code_modified(N, A, B, C);
+#elif EXPERIMENT == 1
     // about 19%
     square_dgemm_block_jki(N, A, B, C);
 #elif EXPERIMENT == 2
