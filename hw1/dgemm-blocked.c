@@ -660,10 +660,10 @@ _mm512_store_pd(C_col + ii + 5 * CACHELINE, c5);
 // aim for L2
 #define BLOCK_SIZE 160
 // aim for L1
-#define BLOCK_SIZE2 32
+#define BLOCK_SIZE2 48
 
 void square_dgemm_jki_block_jki_two_level(int N, double* A, double* B, double* C) {
-    assert(BLOCK_SIZE * BLOCK_SIZE2 == 0);
+    assert(BLOCK_SIZE % BLOCK_SIZE2 == 0);
 
     int N_pad = (N + BLOCK_SIZE2 - 1) / BLOCK_SIZE2 * BLOCK_SIZE2;
 
