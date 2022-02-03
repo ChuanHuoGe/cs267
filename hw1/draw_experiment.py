@@ -126,5 +126,18 @@ def main():
     plot_exps([exp3, exp8], ["w/o loop unroll", "w/ loop unroll"], "loop_unroll", "Loop unroll or not comparision")
     plot_percent([exp3, exp8], ["w/o loop unroll", "w/ loop unroll"], "Method", "loop_unroll_bar", "Loop unroll or not comparision")
 
+    # prefetch
+    exp10 = Exp(root / "job-blocked.exp10")
+    plot_percent([exp3, exp10], ["w/o prefetch", "w/ prefetch"], "Method", "prefetch_bar", "Prefetch or not comparision")
+
+    # Gotoblas comparison
+    exp12 = Exp(root / "job-blocked.exp12")
+    exp13 = Exp(root / "job-blocked.exp13")
+    exp14 = Exp(root / "job-blocked.exp14")
+
+    plot_percent([exp3, exp12, exp13, exp14],
+            ["Our fast method", "GotoBLAS jki", "GotoBLAS kji", "GotoBLAS kji w/ packing"],
+            "Method", "gotoblas", "GotoBlas comparision")
+
 if __name__ == "__main__":
     main()
