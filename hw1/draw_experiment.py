@@ -51,6 +51,7 @@ def plot_exps(exps, labels, filename, title):
     plt.ylabel("Mflops/s")
     plt.legend()
     plt.title(title)
+    plt.tight_layout()
     plt.savefig(fig_root / (filename + ".png"))
     plt.clf()
 
@@ -98,6 +99,32 @@ def main():
     exp4 = Exp(root / "job-blocked.exp4")
     plot_exps([exp3, exp4], ["global-level jki", "global-level kji"], "global_level", "Global-level loop order comparision")
 
+    exp7 = Exp(root / "job-blocked.exp7")
+    plot_exps([exp3, exp7], ["w/o packing", "w/ packing"], "pack_or_not", "Pack or not comparision")
+
+    # two level blocking
+    exp9_b144 = Exp(root / "job-blocked.exp9_b144")
+    exp9_b192 = Exp(root / "job-blocked.exp9_b192")
+    exp9_b240 = Exp(root / "job-blocked.exp9_b240")
+    exp9_b288 = Exp(root / "job-blocked.exp9_b288")
+    exp9_b336 = Exp(root / "job-blocked.exp9_b336")
+    exp9_b384 = Exp(root / "job-blocked.exp9_b384")
+
+    plot_percent([exp3, exp9_b144, exp9_b192, exp9_b240, exp9_b288, exp9_b336, exp9_b384],
+            ["one level"]  + ["{}".format(num) for num in [144, 192, 240, 288, 336, 384]],
+             "BLOCK_SIZE",
+             "two_level_blocksize", "The effect of different BLOCK_SIZE for two-level blocking")
+
+    # padding
+    exp11 = Exp(root / "job-blocked.exp11")
+    plot_exps([exp3, exp11], ["w/ padding", "w/o padding"], "pad_or_not", "Pad or not comparision")
+    plot_percent([exp3, exp11], ["w/ padding", "w/o padding"], "Method",
+            "pad_or_not_bar", "Pad or not comparision")
+
+    # loop unroll
+    exp8 = Exp(root / "job-blocked.exp8")
+    plot_exps([exp3, exp8], ["w/o loop unroll", "w/ loop unroll"], "loop_unroll", "Loop unroll or not comparision")
+    plot_percent([exp3, exp8], ["w/o loop unroll", "w/ loop unroll"], "Method", "loop_unroll_bar", "Loop unroll or not comparision")
 
 if __name__ == "__main__":
     main()
