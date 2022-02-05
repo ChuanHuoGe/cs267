@@ -2,11 +2,11 @@
 #include <assert.h>
 
 #define CACHELINE 8
-#define BLOCK_SIZE 48
+#define BLOCK_SIZE 168
 
 #define STRINGIFY2(X) #X
 #define STRINGIFY(X) STRINGIFY2(X)
-#define EXPERIMENT 3
+#define EXPERIMENT 16
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 
 #if EXPERIMENT != 9
@@ -206,6 +206,750 @@ void square_dgemm_block_kji(int N, double* A, double* B, double* C) {
     _mm_free(B_align);
     _mm_free(C_align);
 }
+#define H 24
+#define W 8
+// # of registers used
+// A: (H / 8) registers
+// B: 2 registers (because only two vector lanes)
+// C: (H / 8) * 8
+// When H = 24 -> 3 + 2 + 3 * 8 = 29 registers
+
+void square_dgemm_microkernel(int N, double* A, double* B, double* C){
+    int N_pad = (N + H - 1) / H * H;
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    cpy(N_pad, N, A, A_align);
+    cpy(N_pad, N, B, B_align);
+    cpy(N_pad, N, C, C_align);
+
+    for(int i = 0; i < N_pad; i += BLOCK_SIZE){
+        for(int j = 0; j < N_pad; j += BLOCK_SIZE){
+            for(int k = 0; k < N_pad; k += BLOCK_SIZE){
+                const int M = min(N_pad - i, BLOCK_SIZE);
+                const int N = min(N_pad - j, BLOCK_SIZE);
+                const int K = min(N_pad - k, BLOCK_SIZE);
+
+                double *A_block = A_align + i + k * N_pad;
+                double *B_block = B_align + k + j * N_pad;
+                double *C_block = C_align + i + j * N_pad;
+
+                for(int ii = 0; ii < M; ii += H){
+                    double *A_panel = A_block + ii;
+                    for(int jj = 0; jj < N; jj += W){
+                        double *B_panel = B_block + jj * N_pad;
+                        double *C_block_small = C_block + ii + jj * N_pad;
+/*[[[cog
+import cog
+
+H = 24
+W = 8
+NUM_B_REGISTERS = 2
+CACHELINE = 8
+
+# Declare registers for A
+for i in range(H // CACHELINE):
+    cog.out(
+    """
+    __m512d a{i};
+    """.format(i=i)
+    )
+# Declare registers for B
+for j in range(NUM_B_REGISTERS):
+    cog.out(
+    """
+    __m512d b{j};
+    """.format(j=j))
+# Declare registers for C
+for i in range(H // CACHELINE):
+    for j in range(W):
+        cog.out(
+        """
+        __m512d c{i}{j};
+        c{i}{j} = _mm512_load_pd(C_block_small + {i} * {CACHELINE} + {j} * N_pad);
+        """.format(i=i, j=j, CACHELINE=CACHELINE)
+        )
+
+]]]*/
+
+__m512d a0;
+
+__m512d a1;
+
+__m512d a2;
+
+__m512d b0;
+
+__m512d b1;
+
+    __m512d c00;
+    c00 = _mm512_load_pd(C_block_small + 0 * 8 + 0 * N_pad);
+    
+    __m512d c01;
+    c01 = _mm512_load_pd(C_block_small + 0 * 8 + 1 * N_pad);
+    
+    __m512d c02;
+    c02 = _mm512_load_pd(C_block_small + 0 * 8 + 2 * N_pad);
+    
+    __m512d c03;
+    c03 = _mm512_load_pd(C_block_small + 0 * 8 + 3 * N_pad);
+    
+    __m512d c04;
+    c04 = _mm512_load_pd(C_block_small + 0 * 8 + 4 * N_pad);
+    
+    __m512d c05;
+    c05 = _mm512_load_pd(C_block_small + 0 * 8 + 5 * N_pad);
+    
+    __m512d c06;
+    c06 = _mm512_load_pd(C_block_small + 0 * 8 + 6 * N_pad);
+    
+    __m512d c07;
+    c07 = _mm512_load_pd(C_block_small + 0 * 8 + 7 * N_pad);
+    
+    __m512d c10;
+    c10 = _mm512_load_pd(C_block_small + 1 * 8 + 0 * N_pad);
+    
+    __m512d c11;
+    c11 = _mm512_load_pd(C_block_small + 1 * 8 + 1 * N_pad);
+    
+    __m512d c12;
+    c12 = _mm512_load_pd(C_block_small + 1 * 8 + 2 * N_pad);
+    
+    __m512d c13;
+    c13 = _mm512_load_pd(C_block_small + 1 * 8 + 3 * N_pad);
+    
+    __m512d c14;
+    c14 = _mm512_load_pd(C_block_small + 1 * 8 + 4 * N_pad);
+    
+    __m512d c15;
+    c15 = _mm512_load_pd(C_block_small + 1 * 8 + 5 * N_pad);
+    
+    __m512d c16;
+    c16 = _mm512_load_pd(C_block_small + 1 * 8 + 6 * N_pad);
+    
+    __m512d c17;
+    c17 = _mm512_load_pd(C_block_small + 1 * 8 + 7 * N_pad);
+    
+    __m512d c20;
+    c20 = _mm512_load_pd(C_block_small + 2 * 8 + 0 * N_pad);
+    
+    __m512d c21;
+    c21 = _mm512_load_pd(C_block_small + 2 * 8 + 1 * N_pad);
+    
+    __m512d c22;
+    c22 = _mm512_load_pd(C_block_small + 2 * 8 + 2 * N_pad);
+    
+    __m512d c23;
+    c23 = _mm512_load_pd(C_block_small + 2 * 8 + 3 * N_pad);
+    
+    __m512d c24;
+    c24 = _mm512_load_pd(C_block_small + 2 * 8 + 4 * N_pad);
+    
+    __m512d c25;
+    c25 = _mm512_load_pd(C_block_small + 2 * 8 + 5 * N_pad);
+    
+    __m512d c26;
+    c26 = _mm512_load_pd(C_block_small + 2 * 8 + 6 * N_pad);
+    
+    __m512d c27;
+    c27 = _mm512_load_pd(C_block_small + 2 * 8 + 7 * N_pad);
+    
+//[[[end]]]
+                        for(int kk = 0; kk < K; ++kk){
+                            double *A_col = A_panel + kk * N_pad;
+                            double *B_row = B_panel + kk;
+/*[[[cog
+import cog
+H = 24
+W = 8
+NUM_B_REGISTERS = 2
+CACHELINE = 8
+
+# Load A
+for i in range(H // CACHELINE):
+    cog.out(
+    """
+        a{i} = _mm512_load_pd(A_col + {i} * {CACHELINE});
+    """.format(i=i, CACHELINE=CACHELINE)
+    )
+
+for i in range(H // CACHELINE):
+    for j in range(W // NUM_B_REGISTERS):
+        # Load B
+        for k in range(NUM_B_REGISTERS):
+            cog.out(
+            """
+            b{k} = _mm512_set1_pd(B_row[{j} * N_pad]);
+            """.format(k=k, j=j*NUM_B_REGISTERS + k)
+            )
+        # Compute C and store C
+        for k in range(NUM_B_REGISTERS):
+            cog.out(
+            """
+            c{i}{j} = _mm512_fmadd_pd(a{i}, b{k}, c{i}{j});
+            """.format(i=i, j=NUM_B_REGISTERS * j + k, k=k, CACHELINE=CACHELINE)
+            )
+
+
+
+]]]*/
+
+a0 = _mm512_load_pd(A_col + 0 * 8);
+    
+a1 = _mm512_load_pd(A_col + 1 * 8);
+    
+a2 = _mm512_load_pd(A_col + 2 * 8);
+    
+    b0 = _mm512_set1_pd(B_row[0 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[1 * N_pad]);
+    
+    c00 = _mm512_fmadd_pd(a0, b0, c00);
+    
+    c01 = _mm512_fmadd_pd(a0, b1, c01);
+    
+    b0 = _mm512_set1_pd(B_row[2 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[3 * N_pad]);
+    
+    c02 = _mm512_fmadd_pd(a0, b0, c02);
+    
+    c03 = _mm512_fmadd_pd(a0, b1, c03);
+    
+    b0 = _mm512_set1_pd(B_row[4 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[5 * N_pad]);
+    
+    c04 = _mm512_fmadd_pd(a0, b0, c04);
+    
+    c05 = _mm512_fmadd_pd(a0, b1, c05);
+    
+    b0 = _mm512_set1_pd(B_row[6 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[7 * N_pad]);
+    
+    c06 = _mm512_fmadd_pd(a0, b0, c06);
+    
+    c07 = _mm512_fmadd_pd(a0, b1, c07);
+    
+    b0 = _mm512_set1_pd(B_row[0 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[1 * N_pad]);
+    
+    c10 = _mm512_fmadd_pd(a1, b0, c10);
+    
+    c11 = _mm512_fmadd_pd(a1, b1, c11);
+    
+    b0 = _mm512_set1_pd(B_row[2 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[3 * N_pad]);
+    
+    c12 = _mm512_fmadd_pd(a1, b0, c12);
+    
+    c13 = _mm512_fmadd_pd(a1, b1, c13);
+    
+    b0 = _mm512_set1_pd(B_row[4 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[5 * N_pad]);
+    
+    c14 = _mm512_fmadd_pd(a1, b0, c14);
+    
+    c15 = _mm512_fmadd_pd(a1, b1, c15);
+    
+    b0 = _mm512_set1_pd(B_row[6 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[7 * N_pad]);
+    
+    c16 = _mm512_fmadd_pd(a1, b0, c16);
+    
+    c17 = _mm512_fmadd_pd(a1, b1, c17);
+    
+    b0 = _mm512_set1_pd(B_row[0 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[1 * N_pad]);
+    
+    c20 = _mm512_fmadd_pd(a2, b0, c20);
+    
+    c21 = _mm512_fmadd_pd(a2, b1, c21);
+    
+    b0 = _mm512_set1_pd(B_row[2 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[3 * N_pad]);
+    
+    c22 = _mm512_fmadd_pd(a2, b0, c22);
+    
+    c23 = _mm512_fmadd_pd(a2, b1, c23);
+    
+    b0 = _mm512_set1_pd(B_row[4 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[5 * N_pad]);
+    
+    c24 = _mm512_fmadd_pd(a2, b0, c24);
+    
+    c25 = _mm512_fmadd_pd(a2, b1, c25);
+    
+    b0 = _mm512_set1_pd(B_row[6 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[7 * N_pad]);
+    
+    c26 = _mm512_fmadd_pd(a2, b0, c26);
+    
+    c27 = _mm512_fmadd_pd(a2, b1, c27);
+    
+//[[[end]]]
+                        }
+                        
+/*[[[cog
+import cog
+H = 24
+W = 8
+CACHELINE = 8
+# Store the C register back
+for i in range(H // CACHELINE):
+    for j in range(W):
+        cog.out(
+        """
+        _mm512_store_pd(C_block_small + {i} * {CACHELINE} + {j} * N_pad, c{i}{j});
+        """.format(i=i,j=j, CACHELINE=CACHELINE)
+        )
+]]]*/
+
+_mm512_store_pd(C_block_small + 0 * 8 + 0 * N_pad, c00);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 1 * N_pad, c01);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 2 * N_pad, c02);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 3 * N_pad, c03);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 4 * N_pad, c04);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 5 * N_pad, c05);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 6 * N_pad, c06);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 7 * N_pad, c07);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 0 * N_pad, c10);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 1 * N_pad, c11);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 2 * N_pad, c12);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 3 * N_pad, c13);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 4 * N_pad, c14);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 5 * N_pad, c15);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 6 * N_pad, c16);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 7 * N_pad, c17);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 0 * N_pad, c20);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 1 * N_pad, c21);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 2 * N_pad, c22);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 3 * N_pad, c23);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 4 * N_pad, c24);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 5 * N_pad, c25);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 6 * N_pad, c26);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 7 * N_pad, c27);
+
+//[[[end]]]
+                    }
+                }
+            }
+        }
+    }
+
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
+        }
+    }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
+}
+
+void square_dgemm_jki_microkernel(int N, double* A, double* B, double* C){
+    int N_pad = (N + H - 1) / H * H;
+
+    double *A_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *B_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+    double *C_align = (double *)_mm_malloc(N_pad * N_pad * sizeof(double), CACHELINE * sizeof(double));
+
+    cpy(N_pad, N, A, A_align);
+    cpy(N_pad, N, B, B_align);
+    cpy(N_pad, N, C, C_align);
+
+    for(int j = 0; j < N_pad; j += BLOCK_SIZE){
+        for(int k = 0; k < N_pad; k += BLOCK_SIZE){
+            for(int i = 0; i < N_pad; i += BLOCK_SIZE){
+                const int M = min(N_pad - i, BLOCK_SIZE);
+                const int N = min(N_pad - j, BLOCK_SIZE);
+                const int K = min(N_pad - k, BLOCK_SIZE);
+
+                double *A_block = A_align + i + k * N_pad;
+                double *B_block = B_align + k + j * N_pad;
+                double *C_block = C_align + i + j * N_pad;
+
+                for(int ii = 0; ii < M; ii += H){
+                    for(int jj = 0; jj < N; jj += W){
+                        double *A_panel = A_block + ii;
+                        double *B_panel = B_block + jj * N_pad;
+                        double *C_block_small = C_block + ii + jj * N_pad;
+/*[[[cog
+import cog
+
+H = 24
+W = 8
+NUM_B_REGISTERS = 2
+CACHELINE = 8
+
+# Declare registers for A
+for i in range(H // CACHELINE):
+    cog.out(
+    """
+    __m512d a{i};
+    """.format(i=i)
+    )
+# Declare registers for B
+for j in range(NUM_B_REGISTERS):
+    cog.out(
+    """
+    __m512d b{j};
+    """.format(j=j))
+# Declare registers for C
+for i in range(H // CACHELINE):
+    for j in range(W):
+        cog.out(
+        """
+        __m512d c{i}{j};
+        c{i}{j} = _mm512_load_pd(C_block_small + {i} * {CACHELINE} + {j} * N_pad);
+        """.format(i=i, j=j, CACHELINE=CACHELINE)
+        )
+
+]]]*/
+
+__m512d a0;
+
+__m512d a1;
+
+__m512d a2;
+
+__m512d b0;
+
+__m512d b1;
+
+    __m512d c00;
+    c00 = _mm512_load_pd(C_block_small + 0 * 8 + 0 * N_pad);
+    
+    __m512d c01;
+    c01 = _mm512_load_pd(C_block_small + 0 * 8 + 1 * N_pad);
+    
+    __m512d c02;
+    c02 = _mm512_load_pd(C_block_small + 0 * 8 + 2 * N_pad);
+    
+    __m512d c03;
+    c03 = _mm512_load_pd(C_block_small + 0 * 8 + 3 * N_pad);
+    
+    __m512d c04;
+    c04 = _mm512_load_pd(C_block_small + 0 * 8 + 4 * N_pad);
+    
+    __m512d c05;
+    c05 = _mm512_load_pd(C_block_small + 0 * 8 + 5 * N_pad);
+    
+    __m512d c06;
+    c06 = _mm512_load_pd(C_block_small + 0 * 8 + 6 * N_pad);
+    
+    __m512d c07;
+    c07 = _mm512_load_pd(C_block_small + 0 * 8 + 7 * N_pad);
+    
+    __m512d c10;
+    c10 = _mm512_load_pd(C_block_small + 1 * 8 + 0 * N_pad);
+    
+    __m512d c11;
+    c11 = _mm512_load_pd(C_block_small + 1 * 8 + 1 * N_pad);
+    
+    __m512d c12;
+    c12 = _mm512_load_pd(C_block_small + 1 * 8 + 2 * N_pad);
+    
+    __m512d c13;
+    c13 = _mm512_load_pd(C_block_small + 1 * 8 + 3 * N_pad);
+    
+    __m512d c14;
+    c14 = _mm512_load_pd(C_block_small + 1 * 8 + 4 * N_pad);
+    
+    __m512d c15;
+    c15 = _mm512_load_pd(C_block_small + 1 * 8 + 5 * N_pad);
+    
+    __m512d c16;
+    c16 = _mm512_load_pd(C_block_small + 1 * 8 + 6 * N_pad);
+    
+    __m512d c17;
+    c17 = _mm512_load_pd(C_block_small + 1 * 8 + 7 * N_pad);
+    
+    __m512d c20;
+    c20 = _mm512_load_pd(C_block_small + 2 * 8 + 0 * N_pad);
+    
+    __m512d c21;
+    c21 = _mm512_load_pd(C_block_small + 2 * 8 + 1 * N_pad);
+    
+    __m512d c22;
+    c22 = _mm512_load_pd(C_block_small + 2 * 8 + 2 * N_pad);
+    
+    __m512d c23;
+    c23 = _mm512_load_pd(C_block_small + 2 * 8 + 3 * N_pad);
+    
+    __m512d c24;
+    c24 = _mm512_load_pd(C_block_small + 2 * 8 + 4 * N_pad);
+    
+    __m512d c25;
+    c25 = _mm512_load_pd(C_block_small + 2 * 8 + 5 * N_pad);
+    
+    __m512d c26;
+    c26 = _mm512_load_pd(C_block_small + 2 * 8 + 6 * N_pad);
+    
+    __m512d c27;
+    c27 = _mm512_load_pd(C_block_small + 2 * 8 + 7 * N_pad);
+    
+//[[[end]]]
+                        for(int kk = 0; kk < K; ++kk){
+                            double *A_col = A_panel + kk * N_pad;
+                            double *B_row = B_panel + kk;
+/*[[[cog
+import cog
+H = 24
+W = 8
+NUM_B_REGISTERS = 2
+CACHELINE = 8
+
+# Load A
+for i in range(H // CACHELINE):
+    cog.out(
+    """
+        a{i} = _mm512_load_pd(A_col + {i} * {CACHELINE});
+    """.format(i=i, CACHELINE=CACHELINE)
+    )
+
+for i in range(H // CACHELINE):
+    for j in range(W // NUM_B_REGISTERS):
+        # Load B
+        for k in range(NUM_B_REGISTERS):
+            cog.out(
+            """
+            b{k} = _mm512_set1_pd(B_row[{j} * N_pad]);
+            """.format(k=k, j=j*NUM_B_REGISTERS + k)
+            )
+        # Compute C and store C
+        for k in range(NUM_B_REGISTERS):
+            cog.out(
+            """
+            c{i}{j} = _mm512_fmadd_pd(a{i}, b{k}, c{i}{j});
+            """.format(i=i, j=NUM_B_REGISTERS * j + k, k=k, CACHELINE=CACHELINE)
+            )
+
+
+
+]]]*/
+
+a0 = _mm512_load_pd(A_col + 0 * 8);
+    
+a1 = _mm512_load_pd(A_col + 1 * 8);
+    
+a2 = _mm512_load_pd(A_col + 2 * 8);
+    
+    b0 = _mm512_set1_pd(B_row[0 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[1 * N_pad]);
+    
+    c00 = _mm512_fmadd_pd(a0, b0, c00);
+    
+    c01 = _mm512_fmadd_pd(a0, b1, c01);
+    
+    b0 = _mm512_set1_pd(B_row[2 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[3 * N_pad]);
+    
+    c02 = _mm512_fmadd_pd(a0, b0, c02);
+    
+    c03 = _mm512_fmadd_pd(a0, b1, c03);
+    
+    b0 = _mm512_set1_pd(B_row[4 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[5 * N_pad]);
+    
+    c04 = _mm512_fmadd_pd(a0, b0, c04);
+    
+    c05 = _mm512_fmadd_pd(a0, b1, c05);
+    
+    b0 = _mm512_set1_pd(B_row[6 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[7 * N_pad]);
+    
+    c06 = _mm512_fmadd_pd(a0, b0, c06);
+    
+    c07 = _mm512_fmadd_pd(a0, b1, c07);
+    
+    b0 = _mm512_set1_pd(B_row[0 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[1 * N_pad]);
+    
+    c10 = _mm512_fmadd_pd(a1, b0, c10);
+    
+    c11 = _mm512_fmadd_pd(a1, b1, c11);
+    
+    b0 = _mm512_set1_pd(B_row[2 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[3 * N_pad]);
+    
+    c12 = _mm512_fmadd_pd(a1, b0, c12);
+    
+    c13 = _mm512_fmadd_pd(a1, b1, c13);
+    
+    b0 = _mm512_set1_pd(B_row[4 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[5 * N_pad]);
+    
+    c14 = _mm512_fmadd_pd(a1, b0, c14);
+    
+    c15 = _mm512_fmadd_pd(a1, b1, c15);
+    
+    b0 = _mm512_set1_pd(B_row[6 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[7 * N_pad]);
+    
+    c16 = _mm512_fmadd_pd(a1, b0, c16);
+    
+    c17 = _mm512_fmadd_pd(a1, b1, c17);
+    
+    b0 = _mm512_set1_pd(B_row[0 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[1 * N_pad]);
+    
+    c20 = _mm512_fmadd_pd(a2, b0, c20);
+    
+    c21 = _mm512_fmadd_pd(a2, b1, c21);
+    
+    b0 = _mm512_set1_pd(B_row[2 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[3 * N_pad]);
+    
+    c22 = _mm512_fmadd_pd(a2, b0, c22);
+    
+    c23 = _mm512_fmadd_pd(a2, b1, c23);
+    
+    b0 = _mm512_set1_pd(B_row[4 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[5 * N_pad]);
+    
+    c24 = _mm512_fmadd_pd(a2, b0, c24);
+    
+    c25 = _mm512_fmadd_pd(a2, b1, c25);
+    
+    b0 = _mm512_set1_pd(B_row[6 * N_pad]);
+    
+    b1 = _mm512_set1_pd(B_row[7 * N_pad]);
+    
+    c26 = _mm512_fmadd_pd(a2, b0, c26);
+    
+    c27 = _mm512_fmadd_pd(a2, b1, c27);
+    
+//[[[end]]]
+                        }
+                        
+/*[[[cog
+import cog
+H = 24
+W = 8
+CACHELINE = 8
+# Store the C register back
+for i in range(H // CACHELINE):
+    for j in range(W):
+        cog.out(
+        """
+        _mm512_store_pd(C_block_small + {i} * {CACHELINE} + {j} * N_pad, c{i}{j});
+        """.format(i=i,j=j, CACHELINE=CACHELINE)
+        )
+]]]*/
+
+_mm512_store_pd(C_block_small + 0 * 8 + 0 * N_pad, c00);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 1 * N_pad, c01);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 2 * N_pad, c02);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 3 * N_pad, c03);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 4 * N_pad, c04);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 5 * N_pad, c05);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 6 * N_pad, c06);
+
+_mm512_store_pd(C_block_small + 0 * 8 + 7 * N_pad, c07);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 0 * N_pad, c10);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 1 * N_pad, c11);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 2 * N_pad, c12);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 3 * N_pad, c13);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 4 * N_pad, c14);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 5 * N_pad, c15);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 6 * N_pad, c16);
+
+_mm512_store_pd(C_block_small + 1 * 8 + 7 * N_pad, c17);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 0 * N_pad, c20);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 1 * N_pad, c21);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 2 * N_pad, c22);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 3 * N_pad, c23);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 4 * N_pad, c24);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 5 * N_pad, c25);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 6 * N_pad, c26);
+
+_mm512_store_pd(C_block_small + 2 * 8 + 7 * N_pad, c27);
+
+//[[[end]]]
+                    }
+                }
+            }
+        }
+    }
+
+    for(int j = 0; j < N; j++){
+        for(int i = 0; i < N; i++){
+            C[i + j * N] = C_align[i + j * N_pad];
+        }
+    }
+
+    _mm_free(A_align);
+    _mm_free(B_align);
+    _mm_free(C_align);
+}
+
 void square_dgemm_jki_block_jki(int N, double* A, double* B, double* C) {
     int N_pad = (N + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
 
@@ -1113,6 +1857,10 @@ void square_dgemm(int N, double* A, double* B, double* C) {
 #elif EXPERIMENT == 14
     // about 13%
     square_dgemm_gotoblas_block_kji_packing(N, A, B, C);
+#elif EXPERIMENT == 15
+    square_dgemm_microkernel(N, A, B, C);
+#elif EXPERIMENT == 16
+    square_dgemm_jki_microkernel(N, A, B, C);
 #else
     assert(0);
 #endif
