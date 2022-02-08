@@ -4,7 +4,7 @@
 #include <vector>
 #include <algorithm>
 
-#define BINSIZE (0.01 + 0.01)
+#define BINSIZE (0.01 + 0.001)
 
 constexpr int bi(double x){
     return floor(x / BINSIZE);
@@ -64,6 +64,8 @@ void move(particle_t& p, double size) {
     // no change, return
     if(p.x == x_ori and p.y == y_ori)
         return;
+    // no change in bin
+    if(bi(x_ori) == bi(p.x) and bj(y_ori) == bj(p.y)) return;
 
     // the coordinate changes, update this particle to a correct bin
     std::vector<particle_t*> &grid = bins[bi(x_ori) * griddim + bj(y_ori)];
@@ -107,7 +109,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
         // Clear the acceleration
         parts[i].ax = parts[i].ay = 0;
         // Check 9 neighbor grids (including itself)
-        for(int d = 0; d < 9; d++){
+        for(int d = 0; d < 9; ++d){
             int bi_nei = bii + dir[d][0];
             int bj_nei = bjj + dir[d][1];
             // out of bound
