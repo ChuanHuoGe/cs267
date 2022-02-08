@@ -15,7 +15,9 @@ constexpr int bj(double y){
 // bin[i][j] = the particles
 std::vector<std::vector<particle_t*>> bins;
 int griddim;
-int dir[9][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}, {0, 0}};
+
+// Ensure loop over row by row
+int dir[9][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 0}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
 
 // Apply the force from neighbor to particle
 void apply_force(particle_t& particle, particle_t& neighbor) {
