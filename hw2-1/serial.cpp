@@ -43,14 +43,12 @@ void apply_force(particle_t& particle, particle_t& neighbor) {
 void move(particle_t& p, double size) {
     // Slightly simplified Velocity Verlet integration
     // Conserves energy better than explicit Euler method
-    p.vx += p.ax * dt;
-    p.vy += p.ay * dt;
-
     double x_ori = p.x;
     double y_ori = p.y;
 
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
+    // Update vx, vy and directly use there return value to update x,y
+    p.x += (p.vx += p.ax * dt) * dt;
+    p.y += (p.vy += p.ay * dt) * dt;
 
     // Bounce from walls
     while (p.x < 0 || p.x > size) {
@@ -64,8 +62,10 @@ void move(particle_t& p, double size) {
     }
 
     // no change, return
-    if(p.x == x_ori and p.y == y_ori)
-        return;
+    // Probabilistically, it will almost never happen,
+    // so comment it
+    /* if(p.x == x_ori and p.y == y_ori) */
+    /*     return; */
     // no change in bin
     if(bi(x_ori) == bi(p.x) and bj(y_ori) == bj(p.y)) return;
 
@@ -94,11 +94,12 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     griddim = floor(size / BINSIZE) + 1;
 
     bins = std::vector<std::vector<particle_t*>>(griddim * griddim);
+    const int space = ceil(1.2 * BINSIZE * BINSIZE * 1. / density);
     // Pre-reserve the memory at once
     for(int i = 0; i < griddim; ++i){
         for(int j = 0; j < griddim; ++j){
             // reserve the 1.2 * # of expected particles
-            bins[i * griddim + j].reserve(ceil(1.2 * BINSIZE * BINSIZE * 1. / density));
+            bins[i * griddim + j].reserve(space);
         }
     }
     // Put particles into the bins
