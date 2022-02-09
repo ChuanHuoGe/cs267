@@ -104,19 +104,30 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 }
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
+    // Reset the acceleration
+    for(int i = 0; i < num_parts; ++i){
+        parts[i].ax = parts[i].ay = 0;
+    }
     // Loop over each grid (better locality)
     for(int i = 0; i < griddim; ++i){
         for(int j = 0; j < griddim; ++j){
             auto &grid = bins[i * griddim + j];
             // Loop over each particle in this grid
             const int grid_n = grid.size();
-            // reset the acceleration
-            for(int k = 0; k < grid_n; ++k){
-                grid[k]->ax = grid[k]->ay = 0;
-            }
             // For each neighbor grid,
             // apply the force to the particles inside this grid
-            for(int d = 0; d < 9; ++d){
+            // NOTE: the inner loop must start from l+1,
+            // otherwise, we will compute the force twice for particles
+            // in the same grid
+            for(int l = 0; l < grid_n; l++){
+                particle_t *cur = grid[l];
+                for(int k = l+1; k < grid_n; ++k){
+                    particle_t *neighbor = grid[k];
+                    apply_force(*cur, *neighbor);
+                    apply_force(*neighbor, *cur);
+                }
+            }
+            for(int d = 5; d < 9; ++d){
                 int bi_nei = i + dir[d][0];
                 int bj_nei = j + dir[d][1];
                 // out of bound
@@ -130,6 +141,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
                     for(int k = 0; k < neighbor_grid_n; ++k){
                         particle_t *neighbor = neighbor_grid[k];
                         apply_force(*cur, *neighbor);
+                        apply_force(*neighbor, *cur);
                     }
                 }
             }
