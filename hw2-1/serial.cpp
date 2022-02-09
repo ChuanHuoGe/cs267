@@ -93,8 +93,15 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 
     griddim = floor(size / BINSIZE) + 1;
 
-    // Put particles into the bins
     bins = std::vector<std::vector<particle_t*>>(griddim * griddim);
+    // Pre-reserve the memory at once
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            // reserve the 1.2 * # of expected particles
+            bins[i * griddim + j].reserve(ceil(1.2 * BINSIZE * BINSIZE * 1. / density));
+        }
+    }
+    // Put particles into the bins
     for(int i = 0; i < num_parts; ++i){
         double x = parts[i].x;
         double y = parts[i].y;
