@@ -104,25 +104,34 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 }
 
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
-    // Loop over all the particles
-    for(int i = 0; i < num_parts; ++i){
-        int bii = bi(parts[i].x);
-        int bjj = bj(parts[i].y);
-        // Clear the acceleration
-        parts[i].ax = parts[i].ay = 0;
-        // Check 9 neighbor grids (including itself)
-        for(int d = 0; d < 9; ++d){
-            int bi_nei = bii + dir[d][0];
-            int bj_nei = bjj + dir[d][1];
-            // out of bound
-            if(bi_nei < 0 or bi_nei >= griddim or bj_nei < 0 or bj_nei >= griddim)
-                continue;
-            std::vector<particle_t*> &grid = bins[bi_nei * griddim + bj_nei];
-            int grid_n = grid.size();
-            // Loop over the particles inside this grid
-            for(int j = 0; j < grid_n; ++j){
-                particle_t *neighbor = grid[j];
-                apply_force(parts[i], *neighbor);
+    // Loop over each grid (better locality)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            auto &grid = bins[i * griddim + j];
+            // Loop over each particle in this grid
+            const int grid_n = grid.size();
+            // reset the acceleration
+            for(int k = 0; k < grid_n; ++k){
+                grid[k]->ax = grid[k]->ay = 0;
+            }
+            // For each neighbor grid,
+            // apply the force to the particles inside this grid
+            for(int d = 0; d < 9; ++d){
+                int bi_nei = i + dir[d][0];
+                int bj_nei = j + dir[d][1];
+                // out of bound
+                if(bi_nei < 0 or bi_nei >= griddim or bj_nei < 0 or bj_nei >= griddim)
+                    continue;
+                // Apply forces to all the particles inside this grid
+                auto &neighbor_grid = bins[bi_nei * griddim + bj_nei];
+                const int neighbor_grid_n = neighbor_grid.size();
+                for(int l = 0; l < grid_n; ++l){
+                    particle_t *cur = grid[l];
+                    for(int k = 0; k < neighbor_grid_n; ++k){
+                        particle_t *neighbor = neighbor_grid[k];
+                        apply_force(*cur, *neighbor);
+                    }
+                }
             }
         }
     }
