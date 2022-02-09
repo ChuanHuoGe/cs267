@@ -4,7 +4,30 @@
 #include <vector>
 #include <algorithm>
 
-#define BINSIZE (0.01 + 0.001)
+// 83 for 0.1M
+/* #define BINSIZE (0.01 + 0.001) */
+// 79 for 0.1M
+/* #define BINSIZE (cutoff * 1.2) */
+// 76 for 0.1M
+/* #define BINSIZE (cutoff * 1.3) */
+// 73 for 0.1M
+/* #define BINSIZE (cutoff * 1.4) */
+// 71 for 0.1M
+/* #define BINSIZE (cutoff * 1.5) */
+// 69 for 0.1M (714 for 1M)
+/* #define BINSIZE (cutoff * 1.6) */
+// 68 for 0.1M
+/* #define BINSIZE (cutoff * 1.7) */
+// 66 for 0.1M
+/* #define BINSIZE (cutoff * 1.8) */
+// 64 for 0.1M
+/* #define BINSIZE (cutoff * 1.9) */
+// 63.7 for 0.1M
+/* #define BINSIZE (cutoff * 2.0) */
+// 58 for 0.1M (611 for 1M)
+#define BINSIZE (cutoff * 2.1)
+// 59 for 0.1M
+/* #define BINSIZE (cutoff * 2.2) */
 
 constexpr int bi(double x){
     return floor(x / BINSIZE);
