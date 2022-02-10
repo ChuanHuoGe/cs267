@@ -62,6 +62,29 @@ void apply_force(particle_t& particle, particle_t& neighbor) {
     particle.ay += coef * dy;
 }
 
+void apply_force_bidir(particle_t& particle, particle_t& neighbor) {
+    // Calculate Distance
+    double dx = neighbor.x - particle.x;
+    double dy = neighbor.y - particle.y;
+    double r2 = dx * dx + dy * dy;
+
+    // Check if the two particles should interact
+    if (r2 > cutoff * cutoff)
+        return;
+
+    r2 = fmax(r2, min_r * min_r);
+    double r = sqrt(r2);
+
+    // Very simple short-range repulsive force
+    double coef = (1 - cutoff / r) / r2 / mass;
+
+    particle.ax += coef * dx;
+    particle.ay += coef * dy;
+
+    neighbor.ax -= coef * dx;
+    neighbor.ay -= coef * dy;
+}
+
 // Integrate the ODE
 void move(particle_t& p, double size) {
     // Slightly simplified Velocity Verlet integration
@@ -154,8 +177,9 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
                 particle_t *cur = grid[l];
                 for(int k = l+1; k < grid_n; ++k){
                     particle_t *neighbor = grid[k];
-                    apply_force(*cur, *neighbor);
-                    apply_force(*neighbor, *cur);
+                    /* apply_force(*cur, *neighbor); */
+                    /* apply_force(*neighbor, *cur); */
+                    apply_force_bidir(*cur, *neighbor);
                 }
             }
             for(int d = 5; d < 9; ++d){
@@ -171,8 +195,9 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
                     particle_t *cur = grid[l];
                     for(int k = 0; k < neighbor_grid_n; ++k){
                         particle_t *neighbor = neighbor_grid[k];
-                        apply_force(*cur, *neighbor);
-                        apply_force(*neighbor, *cur);
+                        /* apply_force(*cur, *neighbor); */
+                        /* apply_force(*neighbor, *cur); */
+                        apply_force_bidir(*cur, *neighbor);
                     }
                 }
             }
