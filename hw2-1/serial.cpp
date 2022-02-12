@@ -30,7 +30,7 @@
 // 59 for 0.1M
 /* #define BINSIZE (cutoff * 2.2) */
 
-#define EXPERIMENT 1
+#define EXPERIMENT 0
 
 constexpr int bi(double x){
     return floor(x / BINSIZE);
