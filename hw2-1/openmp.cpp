@@ -9,6 +9,11 @@
 #define BINSIZE (cutoff * 2.1)
 #define NUMTHREADS 20
 
+// The current fastest
+// 3.1 for 1M (20 threads)
+// 35s for 1M (20 threads)
+#define EXPERIMENT 1
+
 constexpr int bi(double x){
     return floor(x / BINSIZE);
 }
@@ -34,8 +39,6 @@ struct particle_t_w_addr{
 std::vector<std::vector<particle_t*>> bins;
 
 int griddim;
-/* int dir[9][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 0}, {0, 1}, {1, -1}, {1, 0}, {1, 1}}; */
-int dir[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
 
 std::vector<std::vector<particle_t_w_addr>> write_bins;
 
@@ -80,6 +83,57 @@ void apply_force_bidir(particle_t_w_addr& particle, particle_t_w_addr& neighbor)
     neighbor.ax -= coef * dx;
     neighbor.ay -= coef * dy;
 }
+
+void apply_force_bidir_w_addr_atomic(particle_t_w_addr& particle, particle_t_w_addr& neighbor) {
+    // Calculate Distance
+    double dx = neighbor.x - particle.x;
+    double dy = neighbor.y - particle.y;
+    double r2 = dx * dx + dy * dy;
+
+    // Check if the two particles should interact
+    if (r2 > cutoff * cutoff)
+        return;
+
+    r2 = fmax(r2, min_r * min_r);
+    double r = sqrt(r2);
+
+    // Very simple short-range repulsive force
+    double coef = (1 - cutoff / r) / r2 / mass;
+#pragma omp atomic
+    particle.ax += coef * dx;
+#pragma omp atomic
+    particle.ay += coef * dy;
+
+#pragma omp atomic
+    neighbor.ax -= coef * dx;
+#pragma omp atomic
+    neighbor.ay -= coef * dy;
+}
+void apply_force_bidir_atomic(particle_t& particle, particle_t& neighbor) {
+    // Calculate Distance
+    double dx = neighbor.x - particle.x;
+    double dy = neighbor.y - particle.y;
+    double r2 = dx * dx + dy * dy;
+
+    // Check if the two particles should interact
+    if (r2 > cutoff * cutoff)
+        return;
+
+    r2 = fmax(r2, min_r * min_r);
+    double r = sqrt(r2);
+
+    // Very simple short-range repulsive force
+    double coef = (1 - cutoff / r) / r2 / mass;
+#pragma omp atomic
+    particle.ax += coef * dx;
+#pragma omp atomic
+    particle.ay += coef * dy;
+
+#pragma omp atomic
+    neighbor.ax -= coef * dx;
+#pragma omp atomic
+    neighbor.ay -= coef * dy;
+}
 // Integrate the ODE
 void move(particle_t_w_addr& p, double size) {
     // Slightly simplified Velocity Verlet integration
@@ -101,6 +155,56 @@ void move(particle_t_w_addr& p, double size) {
         p.y = p.y < 0 ? -p.y : 2 * size - p.y;
         p.vy = -p.vy;
     }
+}
+
+void move_and_update_bin(particle_t& p, double size) {
+    // Slightly simplified Velocity Verlet integration
+    // Conserves energy better than explicit Euler method
+    double x_ori = p.x;
+    double y_ori = p.y;
+
+    // Update vx, vy and directly use there return value to update x,y
+    p.x += (p.vx += p.ax * dt) * dt;
+    p.y += (p.vy += p.ay * dt) * dt;
+
+    // Bounce from walls
+    while (p.x < 0 || p.x > size) {
+        p.x = p.x < 0 ? -p.x : 2 * size - p.x;
+        p.vx = -p.vx;
+    }
+
+    while (p.y < 0 || p.y > size) {
+        p.y = p.y < 0 ? -p.y : 2 * size - p.y;
+        p.vy = -p.vy;
+    }
+
+    // no change in bin
+    if(bi(x_ori) == bi(p.x) and bj(y_ori) == bj(p.y)) return;
+
+    const int from = bi(x_ori) * griddim + bj(y_ori);
+    const int to = bi(p.x) * griddim + bj(p.y);
+
+    // Lock the `from` grid
+    omp_set_lock(&bin_locks[from]);
+    // the coordinate changes, update this particle to a correct bin
+    std::vector<particle_t*> &grid = bins[from];
+    int grid_n = grid.size();
+    // delete the particle from the original grid
+    // NOTE: grid_n should be constant if the density for each grid is a constant
+    for(int i = 0; i < grid_n; ++i){
+        if(grid[i] == &p){
+            grid.erase(grid.begin() + i);
+            break;
+        }
+    }
+    omp_unset_lock(&bin_locks[from]);
+
+    // Lock the `to` grid
+    omp_set_lock(&bin_locks[to]);
+    // insert the particle to the correct grid
+    bins[to].push_back(&p);
+    omp_unset_lock(&bin_locks[to]);
+    return;
 }
 void init_simulation(particle_t* parts, int num_parts, double size) {
 	// You can use this space to initialize data objects that you may need
@@ -135,7 +239,9 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
     /* std::cout << "num_threads:" << omp_get_max_threads() << "\n"; */
 }
 
+#if EXPERIMENT == 0
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
+    static int dir[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
 
 #pragma omp for collapse(2)
     for(int i = 0; i < griddim; ++i){
@@ -229,3 +335,149 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
         }
     }
 }
+#elif EXPERIMENT == 1
+// no use of additional memory
+void simulate_one_step(particle_t* parts, int num_parts, double size) {
+    static int dir[9][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 0}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+#pragma omp for
+    for(int i = 0; i < num_parts; ++i){
+        parts[i].ax = parts[i].ay = 0;
+    }
+#pragma omp for collapse(2)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            auto &grid = bins[i * griddim + j];
+            const int grid_n = grid.size();
+
+            for(int l = 0; l < grid_n; ++l){
+                particle_t *cur = grid[l];
+                for(int k = l+1; k < grid_n; ++k){
+                    particle_t *neighbor = grid[k];
+                    apply_force_bidir_atomic(*cur, *neighbor);
+                }
+            }
+
+            for(int d = 5; d < 9; ++d){
+                int ni = i + dir[d][0];
+                int nj = j + dir[d][1];
+                if(ni < 0 or ni >= griddim or nj < 0 or nj >= griddim)
+                    continue;
+                auto &neighbor_grid = bins[ni * griddim + nj];
+                const int neighbor_grid_n = neighbor_grid.size();
+                for(int l = 0; l < grid_n; ++l){
+                    particle_t *cur = grid[l];
+                    for(int k = 0; k < neighbor_grid_n; ++k){
+                        particle_t *neighbor = neighbor_grid[k];
+                        apply_force_bidir_atomic(*cur, *neighbor);
+                    }
+                }
+            }
+        }
+    }
+#pragma omp for
+    for(int i = 0; i < num_parts; ++i){
+        move_and_update_bin(parts[i], size);
+    }
+}
+#elif EXPERIMENT == 2
+void simulate_one_step(particle_t* parts, int num_parts, double size) {
+    static int dir[9][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 0}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+    // copy because we need to write
+#pragma omp for collapse(2)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            int from = i * griddim + j;
+            auto &center_grid = write_bins[from];
+            center_grid.clear();
+            auto &grid = bins[from];
+            const int grid_n = grid.size();
+            for(int k = 0; k < grid_n; ++k){
+                particle_t *p = grid[k];
+                // copy particle
+                center_grid.push_back({.addr=p, .x=p->x, .y=p->y,
+                    .vx=p->vx, .vy=p->vy, .ax=0, .ay=0});
+            }
+        }
+    }
+
+#pragma omp for collapse(2)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            int from = i * griddim + j;
+
+            auto &center_grid = write_bins[from];
+            const int grid_n = center_grid.size();
+            // Apply force to itself
+            for(int k = 0; k < grid_n; ++k){
+                for(int l = k+1; l < grid_n; ++l){
+                    apply_force_bidir_w_addr_atomic(center_grid[k], center_grid[l]);
+                }
+            }
+            // Apply neighbors' forces to the center grid
+            for(int d = 5; d < 9; ++d){
+                int ni = i + dir[d][0];
+                int nj = j + dir[d][1];
+
+                if(ni < 0 or ni >= griddim or nj < 0 or nj >= griddim)
+                    continue;
+
+                auto &nei = write_bins[ni * griddim + nj];
+                const int nei_n = nei.size();
+
+                for(int k = 0; k < nei_n; ++k){
+                    particle_t_w_addr &pp = nei[k];
+                    // apply force to the center grid
+                    for(int l = 0; l < grid_n; ++l){
+                        apply_force_bidir_w_addr_atomic(center_grid[l], pp);
+                    }
+                }
+            }
+        }
+    }
+    // implicit barrier
+
+#pragma omp for collapse(2)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            int idx = i * griddim + j;
+
+            auto &center_grid = write_bins[idx];
+
+            const int grid_n = center_grid.size();
+
+            for(int k = 0; k < grid_n; ++k){
+                particle_t_w_addr &p = center_grid[k];
+                // Move the particle
+                move(p, size);
+                // Write back (x, y, vx, vy)
+                particle_t *dest = p.addr;
+                dest->x = p.x;
+                dest->y = p.y;
+                dest->vx = p.vx;
+                dest->vy = p.vy;
+
+                int to = bi(p.x) * griddim + bj(p.y);
+                if(idx == to) continue;
+
+                omp_set_lock(&bin_locks[idx]);
+                auto &center_bin = bins[idx];
+                int bin_n = center_bin.size();
+                auto bit = center_bin.begin();
+                // remove that particle pointer
+                for(int l = 0; l < bin_n; ++l){
+                    if(center_bin[l] == dest){
+                        center_bin.erase(bit + l);
+                        break;
+                    }
+                }
+                omp_unset_lock(&bin_locks[idx]);
+
+                omp_set_lock(&bin_locks[to]);
+                // insert this particle
+                bins[to].push_back(dest);
+                omp_unset_lock(&bin_locks[to]);
+            }
+        }
+    }
+}
+#endif
