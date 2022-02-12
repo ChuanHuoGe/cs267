@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <iostream>
 
 // 83 for 0.1M
 /* #define BINSIZE (0.01 + 0.001) */
@@ -29,6 +30,8 @@
 // 59 for 0.1M
 /* #define BINSIZE (cutoff * 2.2) */
 
+#define EXPERIMENT 1
+
 constexpr int bi(double x){
     return floor(x / BINSIZE);
 }
@@ -40,7 +43,12 @@ std::vector<std::vector<particle_t*>> bins;
 int griddim;
 
 // Ensure loop over row by row
+#if EXPERIMENT == 0
 int dir[9][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 0}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+#elif EXPERIMENT == 1
+int dir[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+#endif
+
 
 // Apply the force from neighbor to particle
 void apply_force(particle_t& particle, particle_t& neighbor) {
@@ -155,8 +163,11 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 
         bins[bi(x) * griddim + bj(y)].push_back(&parts[i]);
     }
+
+    /* std::cout << "Running experiment: " << EXPERIMENT << "\n"; */
 }
 
+#if EXPERIMENT == 0
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // Reset the acceleration
     for(int i = 0; i < num_parts; ++i){
@@ -209,3 +220,53 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
         move(parts[i], size);
     }
 }
+#elif EXPERIMENT == 1
+void simulate_one_step(particle_t* parts, int num_parts, double size) {
+    // Reset the acceleration
+    for(int i = 0; i < num_parts; ++i){
+        parts[i].ax = parts[i].ay = 0;
+    }
+    // Loop over each grid (better locality)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            auto &grid = bins[i * griddim + j];
+            // Loop over each particle in this grid
+            const int grid_n = grid.size();
+            // For each neighbor grid,
+            // apply the force to the particles inside this grid
+            // NOTE: the inner loop must start from l+1,
+            // otherwise, we will compute the force twice for particles
+            // in the same grid
+            for(int l = 0; l < grid_n; l++){
+                particle_t *cur = grid[l];
+                for(int k = l+1; k < grid_n; ++k){
+                    particle_t *neighbor = grid[k];
+                    apply_force_bidir(*cur, *neighbor);
+                }
+            }
+            for(int d = 0; d < 8; ++d){
+                int bi_nei = i + dir[d][0];
+                int bj_nei = j + dir[d][1];
+                // out of bound
+                if(bi_nei < 0 or bi_nei >= griddim or bj_nei < 0 or bj_nei >= griddim)
+                    continue;
+                // Apply forces to all the particles inside this grid
+                auto &neighbor_grid = bins[bi_nei * griddim + bj_nei];
+                const int neighbor_grid_n = neighbor_grid.size();
+                for(int l = 0; l < grid_n; ++l){
+                    particle_t *cur = grid[l];
+                    for(int k = 0; k < neighbor_grid_n; ++k){
+                        particle_t *neighbor = neighbor_grid[k];
+                        apply_force(*cur, *neighbor);
+                    }
+                }
+            }
+        }
+    }
+
+    // Move Particles and update each particle's bin
+    for (int i = 0; i < num_parts; ++i) {
+        move(parts[i], size);
+    }
+}
+#endif
