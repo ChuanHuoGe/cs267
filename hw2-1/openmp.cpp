@@ -224,6 +224,8 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
             int idx = i * griddim + j;
             bins[idx].reserve(space);
             write_bins[idx].reserve(space);
+            //init bin_locks
+            omp_init_lock(&bin_locks[idx]);
         }
     }
     // Put particles into the bins
