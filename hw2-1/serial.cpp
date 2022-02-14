@@ -7,30 +7,36 @@
 
 // 83 for 0.1M
 /* #define BINSIZE (0.01 + 0.001) */
+// #define BINSIZE (cutoff * 1.1) 
 // 79 for 0.1M
-/* #define BINSIZE (cutoff * 1.2) */
+// #define BINSIZE (cutoff * 1.2) 
 // 76 for 0.1M
-/* #define BINSIZE (cutoff * 1.3) */
+// #define BINSIZE (cutoff * 1.3)
 // 73 for 0.1M
-/* #define BINSIZE (cutoff * 1.4) */
+// #define BINSIZE (cutoff * 1.4)
 // 71 for 0.1M
-/* #define BINSIZE (cutoff * 1.5) */
+// #define BINSIZE (cutoff * 1.5)
 // 69 for 0.1M (714 for 1M)
-/* #define BINSIZE (cutoff * 1.6) */
+// #define BINSIZE (cutoff * 1.6)
 // 68 for 0.1M
-/* #define BINSIZE (cutoff * 1.7) */
+// #define BINSIZE (cutoff * 1.7)
 // 66 for 0.1M
-/* #define BINSIZE (cutoff * 1.8) */
+// #define BINSIZE (cutoff * 1.8)
 // 64 for 0.1M
-/* #define BINSIZE (cutoff * 1.9) */
+// #define BINSIZE (cutoff * 1.9) 
 // 63.7 for 0.1M
-/* #define BINSIZE (cutoff * 2.0) */
+// #define BINSIZE (cutoff * 2.0)
 // 58 for 0.1M (611 for 1M)
 #define BINSIZE (cutoff * 2.1)
 // 59 for 0.1M
-/* #define BINSIZE (cutoff * 2.2) */
+// #define BINSIZE (cutoff * 2.2) 
+// #define BINSIZE (cutoff * 2.3)
 
 #define EXPERIMENT 0
+//0: all optimize
+//1: all but bi-force
+//2: wo bi-force and reserved
+//3: wo locality
 
 constexpr int bi(double x){
     return floor(x / BINSIZE);
@@ -43,10 +49,10 @@ std::vector<std::vector<particle_t*>> bins;
 int griddim;
 
 // Ensure loop over row by row
-#if EXPERIMENT == 0
-int dir[9][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 0}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
-#elif EXPERIMENT == 1
+#if EXPERIMENT == 3
 int dir[8][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+#else 
+int dir[9][2] = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 0}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
 #endif
 
 
@@ -140,6 +146,7 @@ void move(particle_t& p, double size) {
 }
 
 
+#if EXPERIMENT == 0
 void init_simulation(particle_t* parts, int num_parts, double size) {
 	// You can use this space to initialize static, global data objects
     // that you may need. This function will be called once before the
@@ -166,8 +173,6 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 
     /* std::cout << "Running experiment: " << EXPERIMENT << "\n"; */
 }
-
-#if EXPERIMENT == 0
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // Reset the acceleration
     for(int i = 0; i < num_parts; ++i){
@@ -188,8 +193,8 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
                 particle_t *cur = grid[l];
                 for(int k = l+1; k < grid_n; ++k){
                     particle_t *neighbor = grid[k];
-                    /* apply_force(*cur, *neighbor); */
-                    /* apply_force(*neighbor, *cur); */
+                    // apply_force(*cur, *neighbor); 
+                    // apply_force(*neighbor, *cur); 
                     apply_force_bidir(*cur, *neighbor);
                 }
             }
@@ -206,8 +211,8 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
                     particle_t *cur = grid[l];
                     for(int k = 0; k < neighbor_grid_n; ++k){
                         particle_t *neighbor = neighbor_grid[k];
-                        /* apply_force(*cur, *neighbor); */
-                        /* apply_force(*neighbor, *cur); */
+                        // apply_force(*cur, *neighbor);
+                        // apply_force(*neighbor, *cur);
                         apply_force_bidir(*cur, *neighbor);
                     }
                 }
@@ -220,7 +225,34 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
         move(parts[i], size);
     }
 }
+
 #elif EXPERIMENT == 1
+void init_simulation(particle_t* parts, int num_parts, double size) {
+	// You can use this space to initialize static, global data objects
+    // that you may need. This function will be called once before the
+    // algorithm begins. Do not do any particle simulation here
+
+    griddim = floor(size / BINSIZE) + 1;
+
+    bins = std::vector<std::vector<particle_t*>>(griddim * griddim);
+    const int space = ceil(1.2 * BINSIZE * BINSIZE * 1. / density);
+    // Pre-reserve the memory at once
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            // reserve the 1.2 * # of expected particles
+            bins[i * griddim + j].reserve(space);
+        }
+    }
+    // Put particles into the bins
+    for(int i = 0; i < num_parts; ++i){
+        double x = parts[i].x;
+        double y = parts[i].y;
+
+        bins[bi(x) * griddim + bj(y)].push_back(&parts[i]);
+    }
+
+    /* std::cout << "Running experiment: " << EXPERIMENT << "\n"; */
+}
 void simulate_one_step(particle_t* parts, int num_parts, double size) {
     // Reset the acceleration
     for(int i = 0; i < num_parts; ++i){
@@ -241,7 +273,169 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
                 particle_t *cur = grid[l];
                 for(int k = l+1; k < grid_n; ++k){
                     particle_t *neighbor = grid[k];
-                    apply_force_bidir(*cur, *neighbor);
+                    apply_force(*cur, *neighbor); 
+                    apply_force(*neighbor, *cur); 
+                    // apply_force_bidir(*cur, *neighbor);
+                }
+            }
+            for(int d = 5; d < 9; ++d){
+                int bi_nei = i + dir[d][0];
+                int bj_nei = j + dir[d][1];
+                // out of bound
+                if(bi_nei < 0 or bi_nei >= griddim or bj_nei < 0 or bj_nei >= griddim)
+                    continue;
+                // Apply forces to all the particles inside this grid
+                auto &neighbor_grid = bins[bi_nei * griddim + bj_nei];
+                const int neighbor_grid_n = neighbor_grid.size();
+                for(int l = 0; l < grid_n; ++l){
+                    particle_t *cur = grid[l];
+                    for(int k = 0; k < neighbor_grid_n; ++k){
+                        particle_t *neighbor = neighbor_grid[k];
+                        apply_force(*cur, *neighbor);
+                        apply_force(*neighbor, *cur);
+                        // apply_force_bidir(*cur, *neighbor);
+                    }
+                }
+            }
+        }
+    }
+
+    // Move Particles and update each particle's bin
+    for (int i = 0; i < num_parts; ++i) {
+        move(parts[i], size);
+    }
+}
+
+#elif EXPERIMENT == 2
+void init_simulation(particle_t* parts, int num_parts, double size) {
+	// You can use this space to initialize static, global data objects
+    // that you may need. This function will be called once before the
+    // algorithm begins. Do not do any particle simulation here
+
+    griddim = floor(size / BINSIZE) + 1;
+
+    bins = std::vector<std::vector<particle_t*>>(griddim * griddim);
+    const int space = ceil(1.2 * BINSIZE * BINSIZE * 1. / density);
+    // Pre-reserve the memory at once
+    // for(int i = 0; i < griddim; ++i){
+    //     for(int j = 0; j < griddim; ++j){
+    //         // reserve the 1.2 * # of expected particles
+    //         bins[i * griddim + j].reserve(space);
+    //     }
+    // }
+    // Put particles into the bins
+    for(int i = 0; i < num_parts; ++i){
+        double x = parts[i].x;
+        double y = parts[i].y;
+
+        bins[bi(x) * griddim + bj(y)].push_back(&parts[i]);
+    }
+
+    /* std::cout << "Running experiment: " << EXPERIMENT << "\n"; */
+}
+void simulate_one_step(particle_t* parts, int num_parts, double size) {
+    // Reset the acceleration
+    for(int i = 0; i < num_parts; ++i){
+        parts[i].ax = parts[i].ay = 0;
+    }
+    // Loop over each grid (better locality)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            auto &grid = bins[i * griddim + j];
+            // Loop over each particle in this grid
+            const int grid_n = grid.size();
+            // For each neighbor grid,
+            // apply the force to the particles inside this grid
+            // NOTE: the inner loop must start from l+1,
+            // otherwise, we will compute the force twice for particles
+            // in the same grid
+            for(int l = 0; l < grid_n; l++){
+                particle_t *cur = grid[l];
+                for(int k = l+1; k < grid_n; ++k){
+                    particle_t *neighbor = grid[k];
+                    apply_force(*cur, *neighbor); 
+                    apply_force(*neighbor, *cur); 
+                    // apply_force_bidir(*cur, *neighbor);
+                }
+            }
+            for(int d = 5; d < 9; ++d){
+                int bi_nei = i + dir[d][0];
+                int bj_nei = j + dir[d][1];
+                // out of bound
+                if(bi_nei < 0 or bi_nei >= griddim or bj_nei < 0 or bj_nei >= griddim)
+                    continue;
+                // Apply forces to all the particles inside this grid
+                auto &neighbor_grid = bins[bi_nei * griddim + bj_nei];
+                const int neighbor_grid_n = neighbor_grid.size();
+                for(int l = 0; l < grid_n; ++l){
+                    particle_t *cur = grid[l];
+                    for(int k = 0; k < neighbor_grid_n; ++k){
+                        particle_t *neighbor = neighbor_grid[k];
+                        apply_force(*cur, *neighbor);
+                        apply_force(*neighbor, *cur);
+                        // apply_force_bidir(*cur, *neighbor);
+                    }
+                }
+            }
+        }
+    }
+
+    // Move Particles and update each particle's bin
+    for (int i = 0; i < num_parts; ++i) {
+        move(parts[i], size);
+    }
+}
+#elif EXPERIMENT == 3
+
+void init_simulation(particle_t* parts, int num_parts, double size) {
+	// You can use this space to initialize static, global data objects
+    // that you may need. This function will be called once before the
+    // algorithm begins. Do not do any particle simulation here
+
+    griddim = floor(size / BINSIZE) + 1;
+
+    bins = std::vector<std::vector<particle_t*>>(griddim * griddim);
+    const int space = ceil(1.2 * BINSIZE * BINSIZE * 1. / density);
+    // Pre-reserve the memory at once
+    // for(int i = 0; i < griddim; ++i){
+    //     for(int j = 0; j < griddim; ++j){
+    //         // reserve the 1.2 * # of expected particles
+    //         bins[i * griddim + j].reserve(space);
+    //     }
+    // }
+    // Put particles into the bins
+    for(int i = 0; i < num_parts; ++i){
+        double x = parts[i].x;
+        double y = parts[i].y;
+
+        bins[bi(x) * griddim + bj(y)].push_back(&parts[i]);
+    }
+
+    /* std::cout << "Running experiment: " << EXPERIMENT << "\n"; */
+}
+void simulate_one_step(particle_t* parts, int num_parts, double size) {
+    // Reset the acceleration
+    for(int i = 0; i < num_parts; ++i){
+        parts[i].ax = parts[i].ay = 0;
+    }
+    // Loop over each grid (better locality)
+    for(int i = 0; i < griddim; ++i){
+        for(int j = 0; j < griddim; ++j){
+            auto &grid = bins[i * griddim + j];
+            // Loop over each particle in this grid
+            const int grid_n = grid.size();
+            // For each neighbor grid,
+            // apply the force to the particles inside this grid
+            // NOTE: the inner loop must start from l+1,
+            // otherwise, we will compute the force twice for particles
+            // in the same grid
+            for(int l = 0; l < grid_n; l++){
+                particle_t *cur = grid[l];
+                for(int k = l+1; k < grid_n; ++k){
+                    particle_t *neighbor = grid[k];
+                    apply_force(*cur, *neighbor); 
+                    apply_force(*neighbor, *cur);
+                    // apply_force_bidir(*cur, *neighbor);
                 }
             }
             for(int d = 0; d < 8; ++d){
@@ -269,4 +463,5 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
         move(parts[i], size);
     }
 }
+
 #endif

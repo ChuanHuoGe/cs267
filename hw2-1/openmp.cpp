@@ -13,6 +13,9 @@
 // 3.1 for 1M (20 threads)
 // 35s for 1M (20 threads)
 #define EXPERIMENT 1
+//experiment 0: with center grid copy and write back
+//experiment 1: atomic
+//experiment 2: atomic with copy
 
 constexpr int bi(double x){
     return floor(x / BINSIZE);
@@ -236,7 +239,7 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
         bins[bi(x) * griddim + bj(y)].push_back(&parts[i]);
     }
 
-    omp_set_num_threads(NUMTHREADS);
+    // omp_set_num_threads(NUMTHREADS);
 
     /* std::cout << "num_threads:" << omp_get_max_threads() << "\n"; */
 }
@@ -483,3 +486,5 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
     }
 }
 #endif
+
+
