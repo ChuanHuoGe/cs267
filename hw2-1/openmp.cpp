@@ -217,7 +217,9 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
 
     bins = std::vector<std::vector<particle_t*>>(griddim * griddim);
     bin_locks = std::vector<omp_lock_t>(griddim * griddim);
+#if EXPERIMENT != 1
     write_bins = std::vector<std::vector<particle_t_w_addr>>(griddim * griddim);
+#endif
 
     const int space = ceil(1.2 * BINSIZE * BINSIZE * 1. / density);
     // Pre-reserve the memory at once
@@ -226,7 +228,10 @@ void init_simulation(particle_t* parts, int num_parts, double size) {
             // reserve the 1.2 * # of expected particles
             int idx = i * griddim + j;
             bins[idx].reserve(space);
+#if EXPERIMENT != 1
             write_bins[idx].reserve(space);
+#endif
+
             //init bin_locks
             omp_init_lock(&bin_locks[idx]);
         }
