@@ -69,6 +69,32 @@ void apply_force_bidir(particle_t& particle, particle_t& neighbor) {
     neighbor.ay -= coef * dy;
 }
 
+void move(particle_t& p, double size) {
+    // Slightly simplified Velocity Verlet integration
+    // Conserves energy better than explicit Euler method
+    double x_ori = p.x;
+    double y_ori = p.y;
+
+    // Update vx, vy and directly use there return value to update x,y
+    p.x += (p.vx += p.ax * dt) * dt;
+    p.y += (p.vy += p.ay * dt) * dt;
+
+    // reset (to denote that this particle has finished)
+    p.ax = p.ay = 0;
+
+    // Bounce from walls
+    while (p.x < 0 || p.x > size) {
+        p.x = p.x < 0 ? -p.x : 2 * size - p.x;
+        p.vx = -p.vx;
+    }
+
+    while (p.y < 0 || p.y > size) {
+        p.y = p.y < 0 ? -p.y : 2 * size - p.y;
+        p.vy = -p.vy;
+    }
+    return;
+}
+
 void init_simulation(particle_t* parts, int num_parts, double size, int rank, int num_procs) {
 	// You can use this space to initialize data objects that you may need
 	// This function will be called once before the algorithm begins
@@ -77,22 +103,26 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
     dim = floor(size / BINSIZE) + 1;
     dim_square = dim * dim;
 
+    // Each process will at least do `q` number of works
     q = dim_square / num_procs;
-    r = dim_square % num_procs; // the first `r` process get 1 additional grid
+    // The first r processes will do 1 additional work
+    r = dim_square % num_procs;
 
     if(rank < r){
         local_offset = rank * (q+1);
     }else{
-        local_offset = rank * q + r * (q+1);
+        local_offset = r * (q+1) + (rank - r) * q;
     }
 
+    // # of works(bins) to do
     num_bins = (rank < r)? (q+1):(q);
 
     // NOTE: sorted
     std::unordered_map<int, std::set<int>> temp_rank_grids_send;
     std::unordered_map<int, std::set<int>> temp_rank_grids_recv;
 
-    for(int i = 0; i < num_bins; ++i){
+    // We need to for each process, which grid we need to send to him
+    for(int i = 0; i <  num_bins; ++i){
         int bi = (local_offset + i) / dim;
         int bj = (local_offset + i) % dim;
         for(int d = 0; d < 4; ++d){
@@ -101,7 +131,11 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
             if(ni < 0 or ni >= dim or nj < 0 or nj >= dim)
                 continue;
             int nei_rank = get_rank_from_bin_idx(ni * dim + nj);
+            // If it is still in this process, skip
+            if(nei_rank == rank)
+                continue;
             // I need to send this grid to this process
+            // NOTE: need to avoid duplicate grid indices
             temp_rank_grids_send[nei_rank].insert(local_offset + i);
         }
         for(int d = 5; d < 9; ++d){
@@ -110,6 +144,8 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
             if(ni < 0 or ni >= dim or nj < 0 or nj >= dim)
                 continue;
             int nei_rank = get_rank_from_bin_idx(ni * dim + nj);
+            if(nei_rank == rank)
+                continue;
             // I want to receive (ni, nj) from `nei_rank`
             temp_rank_grids_recv[nei_rank].insert(ni * dim + nj);
         }
@@ -117,22 +153,22 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
 
     // Initialize reqs
     for(auto &kv: temp_rank_grids_send){
-        int trank = kv.first;
+        int target_rank = kv.first;
         auto &grid = kv.second;
         for(int i: grid){
-            rank_grids_send[trank].push_back(i);
+            rank_grids_send[target_rank].push_back(i);
         }
 
-        sendreqs[trank].resize(grid.size());
+        sendreqs[target_rank].resize(grid.size());
     }
     for(auto &kv: temp_rank_grids_recv){
-        int trank = kv.first;
+        int src_rank = kv.first;
         auto &grid = kv.second;
         for(int i: grid){
-            rank_grids_recv[trank].push_back(i);
+            rank_grids_recv[src_rank].push_back(i);
         }
 
-        recvreqs[trank].resize(grid.size());
+        recvreqs[src_rank].resize(grid.size());
     }
 
     int last_bi = (local_offset + num_bins - 1) / dim;
@@ -140,7 +176,10 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
 
     // the last (bi, bj)'s fartherest neighbor grid
     int farthest_bidx = MIN(dim-1, last_bi + 1) * dim + MIN(dim-1, last_bj + 1);
-    num_bins_w_neighbors = farthest_bidx - local_offset;
+    // [local_offset, local_offset + num_bins - 1]: we are responsible for maintaining the particles
+    // [local_offset + num_bins, local_offset + farthest_bidx]:
+    // we are also responsible for computing forces for some of grids in this range
+    num_bins_w_neighbors = farthest_bidx - local_offset + 1;
     // Resize it to include the neighbors on the bottom or right
     local_bins.resize(num_bins_w_neighbors);
 
@@ -200,6 +239,23 @@ void recv_axay(int src_rank,
     }
 }
 
+int sum(std::vector<int> &v){
+    int s = 0;
+    for(int e: v){
+        s += e;
+    }
+    return s;
+}
+
+void exclusive_psum(std::vector<int> &v, std::vector<int> &p){
+    int s = 0;
+    int n = v.size();
+    for(int i = 0; i < n; ++i){
+        p[i] = s;
+        s += v[i];
+    }
+}
+
 void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, int num_procs) {
 
     // 1. Each process collect and send the neighbor's (x, y) information
@@ -231,18 +287,23 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
         }
     }
 
-    // Wait
+    // Wait to make sure you actually send it out
     for(auto &kv: sendreqs){
         auto &reqs = kv.second;
         for(auto &req: reqs){
             MPI_Wait(&req[0], MPI_STATUS_IGNORE);
             MPI_Wait(&req[1], MPI_STATUS_IGNORE);
+
+            MPI_Request_free(&req[0]);
+            MPI_Request_free(&req[1]);
         }
     }
+    // Wait to make sure you actually receive it
     for(auto &kv: recvreqs){
         auto &reqs = kv.second;
         for(auto &req: reqs){
             MPI_Wait(&req[1], MPI_STATUS_IGNORE);
+            MPI_Request_free(&req[1]);
         }
     }
 
@@ -284,7 +345,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
 
         for(int i = 0; i < n; ++i){
             int bidx = grid_indices[i];
-            send_axay(target_rank, local_bins[bidx], reqs[i]);
+            send_axay(target_rank, local_bins[bidx - local_offset], reqs[i]);
         }
     }
     // Recv the (ax, ay) information from top or left neighbors
@@ -296,7 +357,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
         auto &reqs = sendreqs[src_rank];
         for(int i = 0; i < n; ++i){
             int bidx = grid_indices[i];
-            recv_axay(src_rank, local_bins[bidx], reqs[i]);
+            recv_axay(src_rank, local_bins[bidx - local_offset], reqs[i]);
         }
     }
 
@@ -305,12 +366,98 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
         auto &reqs = kv.second;
         for(auto &req: reqs){
             MPI_Wait(&req[1], MPI_STATUS_IGNORE);
+            MPI_Request_free(&req[1]);
         }
     }
 
-    // Move
+    // Move and collect those particles that need to be sent to other processes
+    // need_dist[target_rank] = a list of particles I need to send to target_rank
+    std::map<int, std::vector<particle_t>> need_redist;
+    for(int i = 0; i < num_bins; ++i){
+        auto &grid = local_bins[i];
+        auto it = grid.begin();
+        int grid_n = grid.size();
+        // Loop from the back because we are going to delete the particle
+        // as we loop over it
+        for(int j = grid_n-1; j >= 0; --j){
+            // if this particle has been processed (because of bin redistributing)
+            // continue
+            particle_t &p = grid[j];
+            if(p.ax == 0 and p.ay == 0)
+                continue;
+            // update (x, y, vx, vy) from (ax, ay) information
+            // and reset (ax, ay)
+            move(p, size);
+            //
+            int new_bidx = get_global_bin_idx(p.x, p.y);
+            if(new_bidx == local_offset + i){
+                // no move
+                continue;
+            }else if(local_offset <= new_bidx and new_bidx < local_offset + num_bins){
+                // move, but still in this process (i.e. rank)
+                // delete this particle (that's why loop from the back)
+                grid.erase(it + j);
+                // directly insert into that grid
+                local_bins[new_bidx - local_offset].push_back(p);
+            }else{
+                // delete this particle
+                grid.erase(it + j);
+                // need to send this particle to the other process (i.e. rank)
+                int target_rank = get_rank_from_bin_idx(new_bidx);
+                need_redist[target_rank].push_back(p);
+            }
+        }
+    }
+
+    // --------------------------------------------------------
     // Particle redistribution
-    /* MPI_Alltoallv(); */
+    int send_total = 0;
+    std::vector<int> num_send_parts(num_procs, 0);
+    for(auto &kv: need_redist){
+        int target_rank = kv.first;
+        auto &ps = kv.second;
+        num_send_parts[target_rank] += ps.size();
+        send_total += ps.size();
+    }
+    // num_recv_parts[i] == # of particles process i is gonna send me
+    std::vector<int> num_recv_parts(num_procs);
+    // Send: how many particles am I gonna send to each processor
+    // Recv: how many particles will I expect to receive from each processor
+    MPI_Alltoall(&num_send_parts[0], 1, MPI_INT,
+                 &num_recv_parts[0], 1, MPI_INT,
+                 MPI_COMM_WORLD);
+
+    std::vector<particle_t> send_parts;
+    send_parts.reserve(send_total);
+
+    std::vector<int> send_displ(num_procs);
+
+    int recv_total = sum(num_recv_parts);
+
+    std::vector<particle_t> recv_parts(recv_total);
+    std::vector<int> recv_displ(num_procs);
+
+    // flatten
+    for(auto &kv: need_redist){
+        for(particle_t &t: kv.second){
+            send_parts.push_back(t);
+        }
+    }
+    // compute the displacement
+    exclusive_psum(num_send_parts, send_displ);
+    exclusive_psum(num_recv_parts, recv_displ);
+
+    // Send and recv the particles
+    // implicit barrier
+    MPI_Alltoallv(&send_parts[0], &num_send_parts[0], &send_displ[0], PARTICLE,
+                &recv_parts[0], &num_recv_parts[0], &recv_displ[0], PARTICLE,
+                MPI_COMM_WORLD);
+
+    // Put the recv_parts into the right bins
+    for(particle_t &p: recv_parts){
+        int bidx = get_global_bin_idx(p.x, p.y);
+        local_bins[bidx - local_offset].push_back(p);
+    }
 }
 
 void gather_for_save(particle_t* parts, int num_parts, double size, int rank, int num_procs) {
