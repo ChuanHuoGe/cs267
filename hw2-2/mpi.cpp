@@ -24,11 +24,9 @@ std::map<int, std::vector<Len>> rank_grids_send_len;
 std::map<int, std::vector<std::array<MPI_Request, 2>>> sendreqs;
 std::map<int, std::vector<std::array<MPI_Request, 2>>> recvreqs;
 
-// sendbuf[rank] == a list of buffers
-std::map<int, std::vector<std::vector<char>>> sendbuf;
-
 std::vector<int> num_send_parts;
 std::vector<int> num_recv_parts;
+std::vector<int> send_displ;
 std::vector<int> recv_displ;
 std::vector<particle_t> local_parts_send;
 std::vector<particle_t> local_parts_recv;
@@ -37,7 +35,7 @@ std::vector<particle_t> local_parts_recv;
 int dim;
 int dim_square;
 int q, r;
-// local_bins
+// local_bins information
 int local_offset;
 int num_bins;
 int num_bins_w_neighbors;
@@ -86,8 +84,6 @@ void apply_force_bidir(particle_t& particle, particle_t& neighbor) {
 void move(particle_t& p, double size) {
     // Slightly simplified Velocity Verlet integration
     // Conserves energy better than explicit Euler method
-    double x_ori = p.x;
-    double y_ori = p.y;
 
     // Update vx, vy and directly use there return value to update x,y
     p.x += (p.vx += p.ax * dt) * dt;
@@ -148,6 +144,7 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
 
     // # of works(bins) to do
     num_bins = (rank < r)? (q+1):(q);
+    /* std::cout << "local_offset: " << local_offset << " to " << local_offset + num_bins << std::endl; */
 
     // NOTE: sorted
     std::unordered_map<int, std::set<int>> temp_rank_grids_send;
@@ -208,7 +205,7 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
     int last_bj = (local_offset + num_bins - 1) % dim;
 
     // the last (bi, bj)'s fartherest neighbor grid
-    int farthest_bidx = MIN(dim-1, last_bi + 1) * dim + MIN(dim-1, last_bj + 1);
+    int farthest_bidx = MIN((last_bi + 1) * dim + (last_bj + 1), dim_square-1);
     // [local_offset, local_offset + num_bins - 1]: we are responsible for maintaining the particles
     // [local_offset + num_bins, local_offset + farthest_bidx]:
     // we are also responsible for computing forces for some of grids in this range
@@ -227,9 +224,9 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
     // Make sure all the process collects the particles it need to compute forces
     MPI_Barrier(MPI_COMM_WORLD);
 
-
     num_send_parts.resize(num_procs);
     num_recv_parts.resize(num_procs);
+    send_displ.resize(num_procs);
     recv_displ.resize(num_procs);
     // at most `num_parts` (for root process)
     local_parts_send.reserve(num_parts);
@@ -468,13 +465,15 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
     // Put into the right bin
     for(particle_t &p: parts_moved_but_still_mine){
         int bidx = get_global_bin_idx(p.x, p.y);
+        /* assert(local_offset <= bidx and bidx < local_offset + num_bins); */
         local_bins[bidx - local_offset].push_back(p);
     }
 
     // --------------------------------------------------------
     // Particle redistribution
     int send_total = 0;
-    std::vector<int> num_send_parts(num_procs, 0);
+    for(int i = 0; i < num_procs; ++i)
+        num_send_parts[i] = 0;
     for(auto &kv: need_redist){
         int target_rank = kv.first;
         auto &ps = kv.second;
@@ -482,42 +481,39 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
         send_total += ps.size();
     }
     // num_recv_parts[i] == # of particles process i is gonna send me
-    std::vector<int> num_recv_parts(num_procs);
+
     // Send: how many particles am I gonna send to each processor
     // Recv: how many particles will I expect to receive from each processor
     MPI_Alltoall(&num_send_parts[0], 1, MPI_INT,
                  &num_recv_parts[0], 1, MPI_INT,
                  MPI_COMM_WORLD);
 
-    std::vector<particle_t> send_parts;
-    send_parts.reserve(send_total);
-
-    std::vector<int> send_displ(num_procs);
-
     int recv_total = sum(num_recv_parts);
 
-    std::vector<particle_t> recv_parts(recv_total);
-    std::vector<int> recv_displ(num_procs);
+    local_parts_recv.resize(recv_total);
 
     // flatten
+    local_parts_send.clear();
     for(auto &kv: need_redist){
         for(particle_t &t: kv.second){
-            send_parts.push_back(t);
+            local_parts_send.push_back(t);
         }
     }
+    /* assert(local_parts_send.size() == send_total); */
     // compute the displacement
     exclusive_psum(num_send_parts, send_displ);
     exclusive_psum(num_recv_parts, recv_displ);
 
     // Send and recv the particles
     // implicit barrier
-    MPI_Alltoallv(&send_parts[0], &num_send_parts[0], &send_displ[0], PARTICLE,
-                &recv_parts[0], &num_recv_parts[0], &recv_displ[0], PARTICLE,
+    MPI_Alltoallv(&local_parts_send[0], &num_send_parts[0], &send_displ[0], PARTICLE,
+                &local_parts_recv[0], &num_recv_parts[0], &recv_displ[0], PARTICLE,
                 MPI_COMM_WORLD);
 
-    // Put the recv_parts into the right bins
-    for(particle_t &p: recv_parts){
+    // Put the local_parts_recv into the right bins
+    for(particle_t &p: local_parts_recv){
         int bidx = get_global_bin_idx(p.x, p.y);
+        /* assert(local_offset <= bidx and bidx < local_offset + num_bins); */
         local_bins[bidx - local_offset].push_back(p);
     }
     return;
