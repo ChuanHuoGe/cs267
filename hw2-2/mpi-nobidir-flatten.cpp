@@ -158,10 +158,10 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
 
     // Each process will at least do `q` number of works
     q = dim_square / num_procs;
-    if(rank == 0){
-        std::cout << "q: " << q << std::endl;
-        std::cout << "dim_square: " << dim_square << std::endl;
-    }
+    /* if(rank == 0){ */
+    /*     std::cout << "q: " << q << std::endl; */
+    /*     std::cout << "dim_square: " << dim_square << std::endl; */
+    /* } */
     // The first r processes will do 1 additional work
     r = dim_square % num_procs;
 
@@ -211,6 +211,14 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
         for(int bidx: recv_grid){
             rank_grids_recv[target_src_rank].push_back(bidx);
         }
+
+        // pre-initialize to prevent the tree change its underlying memory
+        // NOTE: I don't think this is actually a problem 
+        send_lens[target_src_rank] = 0;
+
+        // pre-initalize
+        sendreqs[target_src_rank];
+        recvreqs[target_src_rank];
 
         // Pre-allocate a large space
         send_parts[target_src_rank].reserve(num_parts / num_procs);
@@ -342,7 +350,7 @@ void clear_grids_not_owned_by_me(){
     for(int i = local_offset; i < local_start; ++i){
         local_bins[i - local_offset].clear();
     }
-    for(int i = local_offset + num_bins; i < local_offset + num_bins_w_neighbors; ++i){
+    for(int i = local_start + num_bins; i < local_offset + num_bins_w_neighbors; ++i){
         local_bins[i - local_offset].clear();
     }
 }
@@ -367,7 +375,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
         parts_to_send.clear(); // clear all the particles
         for(int i = 0; i < n; ++i){
             int bidx = grid_indices[i];
-            assert(get_rank_from_bin_idx(bidx) == rank);
+            /* assert(get_rank_from_bin_idx(bidx) == rank); */
             auto &grid = local_bins[bidx - local_offset];
             int grid_n = grid.size();
             len += grid_n;
@@ -408,8 +416,8 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
         for(int i = 0; i < n; ++i){
             particle_t &p = parts_to_recv[i];
             int bidx = get_global_bin_idx(p.x, p.y);
-            assert(get_rank_from_bin_idx(bidx) != rank);
-            assert(0 <= bidx and bidx - local_offset < num_bins_w_neighbors);
+            /* assert(get_rank_from_bin_idx(bidx) != rank); */
+            /* assert(0 <= bidx and bidx - local_offset < num_bins_w_neighbors); */
             local_bins[bidx - local_offset].push_back(p);
         }
     }
@@ -466,7 +474,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
             // if this particle has been processed (because of bin redistributing)
             // continue
             particle_t &p = grid[j];
-            assert(get_global_bin_idx(p.x, p.y) == local_start + i);
+            /* assert(get_global_bin_idx(p.x, p.y) == local_start + i); */
             // update (x, y, vx, vy) from (ax, ay) information
             // and reset (ax, ay)
             move(p, size);
@@ -539,7 +547,7 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
     // Put the local_parts_recv into the right bins
     for(particle_t &p: local_parts_recv){
         int bidx = get_global_bin_idx(p.x, p.y);
-        /* assert(local_offset <= bidx and bidx < local_offset + num_bins); */
+        /* assert(local_start <= bidx and bidx < local_start + num_bins); */
         local_bins[bidx - local_offset].push_back(p);
     }
     return;
@@ -577,6 +585,10 @@ void gather_for_save(particle_t* parts, int num_parts, double size, int rank, in
         // the root expects to receive `total` number of particles
         int total = sum(num_recv_parts);
         local_parts_recv.resize(total);
+        /* if(total != num_parts){ */
+        /*     std::cout << "total: " << total << std::endl; */
+        /*     assert(total == num_parts); */
+        /* } */
 
         // Compute the displacement
         exclusive_psum(num_recv_parts, recv_displ);
