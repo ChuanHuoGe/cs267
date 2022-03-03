@@ -15,14 +15,21 @@ std::vector<std::vector<particle_t>> local_bins;
 
 // rank_grids_send[rank] = the grids I need to send to you
 // NOTE: I think the order is vital otherwise Isend, Irecv might be wrong
-std::map<int, std::vector<int>> rank_grids_send;
-std::map<int, std::vector<int>> rank_grids_recv;
+using GridIdx = int;
+std::map<int, std::vector<GridIdx>> rank_grids_send;
+std::map<int, std::vector<GridIdx>> rank_grids_recv;
 
 using Len = int;
-std::map<int, std::vector<Len>> rank_grids_send_len;
 
-std::map<int, std::vector<std::array<MPI_Request, 2>>> sendreqs;
-std::map<int, std::vector<std::array<MPI_Request, 2>>> recvreqs;
+using Rank = int;
+// Because we will need to collect (ax, ay) from them
+std::map<Rank, std::vector<Len>> send_grid_lens;
+std::map<Rank, std::array<MPI_Request, 2>> sendreqs;
+std::map<Rank, std::array<MPI_Request, 2>> recvreqs;
+
+std::map<Rank, Len> send_lens;
+std::map<Rank, std::vector<particle_t>> send_parts;
+std::map<Rank, std::vector<particle_t>> recv_parts;
 
 std::vector<int> num_send_parts;
 std::vector<int> num_recv_parts;
@@ -57,6 +64,8 @@ int get_rank_from_bin_idx(int bidx){
     // check if it belongs to the first r processes
     return (bidx < r * (q + 1))? (bidx / (q+1)):((bidx - r * (q + 1)) / q + r);
 }
+
+int sum(std::vector<int> &);
 
 void apply_force_bidir(particle_t& particle, particle_t& neighbor) {
     // Calculate Distance
@@ -183,22 +192,31 @@ void init_simulation(particle_t* parts, int num_parts, double size, int rank, in
     // Initialize reqs
     for(auto &kv: temp_rank_grids_send){
         int target_rank = kv.first;
-        auto &grid = kv.second;
-        for(int i: grid){
+        auto &grid_indices = kv.second;
+        for(int i: grid_indices){
             rank_grids_send[target_rank].push_back(i);
         }
 
-        sendreqs[target_rank].resize(grid.size());
-        rank_grids_send_len[target_rank].resize(grid.size());
+        // Initialize
+        sendreqs[target_rank];
+        send_lens[target_rank] = 0;
+        send_grid_lens[target_rank].resize(grid_indices.size());
+
+        // Pre-allocate to save memory reallocation time
+        send_parts[target_rank].reserve(num_parts / num_procs);
     }
     for(auto &kv: temp_rank_grids_recv){
         int src_rank = kv.first;
-        auto &grid = kv.second;
-        for(int i: grid){
+        auto &grid_indices = kv.second;
+        for(int i: grid_indices){
             rank_grids_recv[src_rank].push_back(i);
         }
 
-        recvreqs[src_rank].resize(grid.size());
+        // Initialize
+        recvreqs[src_rank];
+
+        // Pre-allocate to save memory reallocation time
+        recv_parts[src_rank].reserve(num_parts / num_procs);
     }
 
     int last_bi = (local_offset + num_bins - 1) / dim;
@@ -246,6 +264,14 @@ void send_grid(int target_rank,
     MPI_Isend(grid.data(), n, PARTICLE, target_rank, 0, MPI_COMM_WORLD, &reqs[1]);
 }
 
+void send_particles(int target_rank, int &n,
+        std::vector<particle_t> &particles,
+        std::array<MPI_Request, 2> &reqs){
+
+    MPI_Isend(&n, 1, MPI_INT, target_rank, 0, MPI_COMM_WORLD, &reqs[0]);
+    MPI_Isend(particles.data(), n, PARTICLE, target_rank, 0, MPI_COMM_WORLD, &reqs[1]);
+}
+
 void recv_grid(int src_rank,
         std::vector<particle_t> &grid,
         int bidx,
@@ -260,25 +286,51 @@ void recv_grid(int src_rank,
     MPI_Irecv(grid.data(), n, PARTICLE, src_rank, 0, MPI_COMM_WORLD, &reqs[1]);
 }
 
-void send_axay(int target_rank,
-        std::vector<particle_t> &grid,
+void recv_particles(int src_rank,
+        std::vector<particle_t> &particles,
         std::array<MPI_Request, 2> &reqs){
-    int n = grid.size();
-    MPI_Isend(&grid[0], n, PARTICLE, target_rank, 0, MPI_COMM_WORLD, &reqs[1]);
+    particles.clear();
+    int n;
+    MPI_Recv(&n, 1, MPI_INT, src_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    particles.resize(n);
+    MPI_Irecv(particles.data(), n, PARTICLE, src_rank, 0, MPI_COMM_WORLD, &reqs[1]);
+}
+
+void send_axay(int target_rank,
+        std::vector<particle_t> &particles,
+        std::array<MPI_Request, 2> &reqs){
+    int n = particles.size();
+    MPI_Isend(&particles[0], n, PARTICLE, target_rank, 0, MPI_COMM_WORLD, &reqs[1]);
 }
 
 void recv_axay(int src_rank,
-        std::vector<particle_t> &grid,
+        std::vector<particle_t> &particles,
+        std::vector<GridIdx> &grid_indices,
+        std::vector<Len> &grid_lens,
         std::array<MPI_Request, 2> &reqs){
 
-    std::vector<particle_t> tmp;
-    // we already know the size, so no need to send n
-    int n = grid.size();
-    tmp.resize(n);
-    MPI_Recv(&tmp[0], n, PARTICLE, src_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    for(int i = 0; i < n; ++i){
-        grid[i].ax += tmp[i].ax;
-        grid[i].ay += tmp[i].ay;
+    int n = particles.size();
+    // overwrite the particles
+    MPI_Recv(particles.data(), n, PARTICLE, src_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    // Increment (ax, ay) to the correct particles
+    int idx = 0;
+
+    assert(sum(grid_lens) == n);
+
+    for(int i = 0; i < n;){
+        if(grid_lens[idx] == 0){
+            idx++;
+        }else{
+            int bidx = grid_indices[idx];
+            std::vector<particle_t> &grid = local_bins[bidx - local_offset];
+            int grid_n = grid.size();
+            assert(idx < grid_lens.size());
+            grid[grid_n - grid_lens[idx]].ax += particles[i].ax;
+            grid[grid_n - grid_lens[idx]].ay += particles[i].ay;
+            --grid_lens[idx]; // decrement
+            ++i; // move the pointer
+        }
     }
 }
 
@@ -299,6 +351,12 @@ void exclusive_psum(std::vector<int> &v, std::vector<int> &p){
     }
 }
 
+void clear_grids_not_owned_by_me(){
+    for(int i = num_bins; i < num_bins_w_neighbors; ++i){
+        local_bins[i].clear();
+    }
+}
+
 void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, int num_procs) {
 
     // 1. Each process collect and send the neighbor's (x, y) information
@@ -311,15 +369,25 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
 
         auto &reqs = sendreqs[target_rank];
 
-        auto &lens = rank_grids_send_len[target_rank];
+        auto &parts_to_send = send_parts[target_rank];
+        int &len = send_lens[target_rank];
+        std::vector<Len> &grid_lens = send_grid_lens[target_rank];
+        len = 0;
+        parts_to_send.clear();
 
         for(int i = 0; i < n; ++i){
             int bidx = grid_indices[i];
-            lens[i] = local_bins[bidx - local_offset].size();
-            // Use a reference because Isend
-            int &num_parts_grid = lens[i];
-            send_grid(target_rank, num_parts_grid, local_bins[bidx - local_offset], bidx, reqs[i]);
+            auto &grid = local_bins[bidx - local_offset];
+            int grid_n = grid.size();
+            len += grid_n;
+            // Record the grid_lens (we will need this when collecting (ax, ay)
+            grid_lens[i] = grid_n;
+            for(int j = 0; j < grid_n; ++j){
+                parts_to_send.push_back(grid[j]);
+            }
         }
+        // Send all particles at once
+        send_particles(target_rank, len, parts_to_send, reqs);
     }
     // Receive the information from bottom and right
     for(auto &kv: rank_grids_recv){
@@ -328,31 +396,32 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
         int n = grid_indices.size();
 
         auto &reqs = recvreqs[src_rank];
-
-        for(int i = 0; i < n; ++i){
-            int bidx = grid_indices[i];
-            recv_grid(src_rank, local_bins[bidx - local_offset], bidx, reqs[i]);
-        }
+        auto &parts_to_recv = recv_parts[src_rank];
+        // Recv all particles at once
+        recv_particles(src_rank, parts_to_recv, reqs);
     }
 
     // Wait to make sure you actually send it out
     for(auto &kv: sendreqs){
         auto &target_rank = kv.first;
         auto &reqs = kv.second;
-        int n = reqs.size();
-
-        for(int i = 0; i < n; ++i){
-            auto &req = reqs[i];
-
-            MPI_Wait(&req[0], MPI_STATUS_IGNORE);
-            MPI_Wait(&req[1], MPI_STATUS_IGNORE);
-        }
+        MPI_Wait(&reqs[0], MPI_STATUS_IGNORE);
+        MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
     }
+
+    // Clear [num_bins, num_bins_w_neighbors) in local_bins
+    clear_grids_not_owned_by_me();
     // Wait to make sure you actually receive it
     for(auto &kv: recvreqs){
+        int src_rank = kv.first;
         auto &reqs = kv.second;
-        for(auto &req: reqs){
-            MPI_Wait(&req[1], MPI_STATUS_IGNORE);
+        MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
+        auto &parts_to_recv = recv_parts[src_rank];
+
+        // Put the particle to the correct grid
+        for(particle_t &p: parts_to_recv){
+            int bidx = get_global_bin_idx(p.x, p.y);
+            local_bins[bidx - local_offset].push_back(p);
         }
     }
 
@@ -400,30 +469,37 @@ void simulate_one_step(particle_t* parts, int num_parts, double size, int rank, 
 
         auto &reqs = recvreqs[target_rank];
 
+        auto &parts_to_send = recv_parts[target_rank];
+        parts_to_send.clear();
+
         for(int i = 0; i < n; ++i){
             int bidx = grid_indices[i];
-            send_axay(target_rank, local_bins[bidx - local_offset], reqs[i]);
+            auto &grid = local_bins[bidx - local_offset];
+
+            // Collect all the particles's (ax, ay)
+            for(particle_t &p: grid){
+                parts_to_send.push_back(p);
+            }
         }
+        send_axay(target_rank, parts_to_send, reqs);
     }
     // Recv the (ax, ay) information from top or left neighbors
     for(auto &kv: rank_grids_send){
         int src_rank = kv.first;
         auto &grid_indices = kv.second;
-        int n = grid_indices.size();
-
         auto &reqs = sendreqs[src_rank];
-        for(int i = 0; i < n; ++i){
-            int bidx = grid_indices[i];
-            recv_axay(src_rank, local_bins[bidx - local_offset], reqs[i]);
-        }
+        auto &parts_to_recv = send_parts[src_rank];
+
+        std::vector<Len> &grid_lens = send_grid_lens[src_rank];
+        assert(grid_lens.size() == grid_indices.size());
+
+        recv_axay(src_rank, parts_to_recv, grid_indices, grid_lens, reqs);
     }
 
     // Wait for sending
     for(auto &kv: recvreqs){
         auto &reqs = kv.second;
-        for(auto &req: reqs){
-            MPI_Wait(&req[1], MPI_STATUS_IGNORE);
-        }
+        MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
     }
 
     // Move and collect those particles that need to be sent to other processes
