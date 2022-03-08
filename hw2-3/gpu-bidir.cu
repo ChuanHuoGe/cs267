@@ -201,5 +201,5 @@ void simulate_one_step(particle_t* parts, int num_parts, double size) {
             parts, bins, bin_start, num_bins, dim);
 
     // Each thread move the particle
-    move_gpu<<<(num_parts + NUM_THREADS - 1) / NUM_THREADS, NUM_THREADS>>>(parts, num_parts, size);
+    move_gpu<<<num_blocks, NUM_THREADS>>>(parts, num_parts, size);
 }
