@@ -10,7 +10,7 @@
 #include <assert.h>
 
 #define BINSIZE (cutoff * 2.1)
-#define NUM_THREADS 256
+#define NUM_THREADS 1024
 #define MIN(x,y) (((x)<(y))?(x):(y))
 
 // Put any static global variables here that you will use throughout the simulation.
@@ -28,7 +28,7 @@ __device__ int get_bidx_from_x_y(double x, double y, int dim){
     return (int)floor(x / BINSIZE) * dim + (int)floor(y / BINSIZE);
 }
 
-__device__ void apply_force_left_gpu(particle_t& particle, particle_t& neighbor) {
+__device__ void apply_force_bidir_gpu(particle_t& particle, particle_t& neighbor) {
     double dx = neighbor.x - particle.x;
     double dy = neighbor.y - particle.y;
     double r2 = dx * dx + dy * dy;
@@ -43,8 +43,15 @@ __device__ void apply_force_left_gpu(particle_t& particle, particle_t& neighbor)
     //
     double coef = (1 - cutoff / r) / r2 / mass;
 
-    particle.ax += coef * dx;
-    particle.ay += coef * dy;
+    /* particle.ax += coef * dx; */
+    /* particle.ay += coef * dy; */
+    atomicAdd(&particle.ax, coef * dx);
+    atomicAdd(&particle.ay, coef * dy);
+
+    /* neighbor.ax -= coef * dx; */
+    /* neighbor.ay -= coef * dy; */
+    atomicAdd(&neighbor.ax, -coef * dx);
+    atomicAdd(&neighbor.ay, -coef * dy);
 }
 
 __global__ void clear_axay(particle_t *parts, int num_parts){
@@ -68,7 +75,15 @@ __global__ void compute_forces_gpu(
     int bi = bidx / dim;
     int bj = bidx % dim;
 
-    for(int d = 0; d < 9; d++){
+    for(int i = bin_start[bidx]; i < bin_start[bidx+1]; ++i){
+        particle_t &p1 = parts[bins[i]];
+        for(int j = i+1; j < bin_start[bidx+1]; ++j){
+            particle_t &p2 = parts[bins[j]];
+            apply_force_bidir_gpu(p1, p2);
+        }
+    }
+
+    for(int d = 5; d < 9; d++){
         int ni = bi + dir[d][0];
         int nj = bj + dir[d][1];
         if(ni < 0 or ni >= dim or nj < 0 or nj >= dim)
@@ -83,7 +98,7 @@ __global__ void compute_forces_gpu(
             for(int j = bin_start[nidx]; j < bin_start[nidx+1]; ++j){
                 particle_t &p2 = parts[bins[j]];
                 // Apply force to p1
-                apply_force_left_gpu(p1, p2);
+                apply_force_bidir_gpu(p1, p2);
             }
         }
     }
