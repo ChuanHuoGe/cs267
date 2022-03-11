@@ -85,10 +85,13 @@ __global__ void compute_forces_gpu(
     int bi = bidx / dim;
     int bj = bidx % dim;
 
-    for(int i = 0, pi = bin_start[bidx]; i < bin_count[bidx]; ++i){
+    const int count = bin_count[bidx];
+    int nei_count;
+
+    for(int i = 0, pi = bin_start[bidx]; i < count; ++i){
         particle_t &p1 = parts[pi];
 
-        for(int j = i+1, pj = next[pi]; j < bin_count[bidx]; ++j){
+        for(int j = i+1, pj = next[pi]; j < count; ++j){
             particle_t &p2 = parts[pj];
             apply_force_bidir_gpu(p1, p2);
 
@@ -109,11 +112,12 @@ __global__ void compute_forces_gpu(
         int nidx = ni * dim + nj;
 
         // Loop over its particles
-        for(int i = 0, pi = bin_start[bidx]; i < bin_count[bidx]; ++i){
+        for(int i = 0, pi = bin_start[bidx]; i < count; ++i){
             particle_t &p1 = parts[pi];
 
             // Loop over neighbor grid's particles
-            for(int j = 0, pj = bin_start[nidx]; j < bin_count[nidx]; ++j){
+            nei_count = bin_count[nidx];
+            for(int j = 0, pj = bin_start[nidx]; j < nei_count; ++j){
                 particle_t &p2 = parts[pj];
                 // Apply force to p1
                 apply_force_bidir_gpu(p1, p2);
