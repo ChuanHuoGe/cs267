@@ -32,8 +32,8 @@ struct HashMap{
     // Distributed find
     bool find(const pkmer_t &key_kmer, kmer_pair &val_kmer);
 
-    static void local_insert(dtable &table, const kmer_pair &kmer_, const uint64_t &h_, const uint64_t &size_);
-    static FB local_find(dtable &table, const pkmer_t &key_kmer_, const uint64_t &h_, const uint64_t &size_);
+    static void local_insert(dtable &table, const kmer_pair &kmer_, uint32_t bucket_idx);
+    static FB local_find(dtable &table, const pkmer_t &key_kmer_, uint32_t bucket_idx);
 };
 
 int log2(int x){
@@ -69,29 +69,27 @@ int HashMap::get_target_rank(const pkmer_t &key_kmer){
 };
 
 bool HashMap::insert(const kmer_pair& kmer){
-    uint64_t h = kmer.hash();
     // these bits are used to identify target rank
-    h >>= num_bits;
+    uint64_t h = kmer.hash();
     // NOTE: this assume no duplicate key will be inserted!
-    upcxx::future<> fut = upcxx::rpc(get_target_rank(kmer.kmer),
-            HashMap::local_insert, dist_table, kmer, h, size);
+    upcxx::future<> fut = upcxx::rpc(h % (uint64_t)num_procs,
+            HashMap::local_insert, dist_table, kmer, (h >> num_bits) % size);
     fut.wait();
     return true;
 };
 
-void HashMap::local_insert(dtable &table, const kmer_pair &kmer_, const uint64_t &h_, const uint64_t &size_){
+void HashMap::local_insert(dtable &table, const kmer_pair &kmer_, uint32_t bucket_idx){
 
-    (*table)[h_ % size_].push_back(kmer_);
+    (*table)[bucket_idx].push_back(kmer_);
 
     return;
 };
 
 bool HashMap::find(const pkmer_t &key_kmer, kmer_pair& val_kmer){
     uint64_t h = key_kmer.hash();
-    h >>= num_bits;
 
-    upcxx::future<FB> fut = upcxx::rpc(get_target_rank(key_kmer),
-            HashMap::local_find, dist_table, key_kmer, h, size);
+    upcxx::future<FB> fut = upcxx::rpc(h % (uint64_t)num_procs,
+            HashMap::local_find, dist_table, key_kmer, (h >> num_bits) % size);
 
     val_kmer.kmer = key_kmer;
     FB fb = fut.wait();
@@ -101,9 +99,8 @@ bool HashMap::find(const pkmer_t &key_kmer, kmer_pair& val_kmer){
     return true;
 };
 
-FB HashMap::local_find(dtable &table, const pkmer_t &key_kmer_,
-    const uint64_t &h_, const uint64_t &size_){
-    std::vector<kmer_pair> &v = (*table)[h_ % size_];
+FB HashMap::local_find(dtable &table, const pkmer_t &key_kmer_, uint32_t bucket_idx){
+    std::vector<kmer_pair> &v = (*table)[bucket_idx];
     FB ret;
 
     // Resolve hash collision by searching

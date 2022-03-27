@@ -53,8 +53,8 @@ int main(int argc, char** argv) {
 
     size_t n_kmers = line_count(kmer_fname);
 
-    // Load factor of 0.5
-    size_t hash_table_size = n_kmers * (1.0 / 0.5);
+    // Load factor of 0.5 and divide it by the number of processes
+    size_t hash_table_size = n_kmers * (1.0 / 0.5) / (double)(upcxx::rank_n());
     HashMap hashmap(hash_table_size);
 
     if (run_type == "verbose") {
