@@ -34,15 +34,6 @@ struct HashMap{
 
     static void local_insert(dtable &table, const kmer_pair &kmer_, uint32_t bucket_idx);
     static FB local_find(dtable &table, const pkmer_t &key_kmer_, uint32_t bucket_idx);
-
-    upcxx::future<std::vector<FB>> find_many(
-            int target, const std::vector<pkmer_t> &key_kmers);
-
-    static std::vector<FB> local_find_many(
-        dtable &table, const std::vector<pkmer_t> &key_kmers, int num_bits, uint64_t size);
-
-    upcxx::future<> insert_many(int target, const std::vector<kmer_pair> &kmers);
-    static void local_insert_many(dtable &table, const std::vector<kmer_pair> &kmers, int num_bits, uint64_t size);
 };
 
 int log2(int x){
@@ -122,48 +113,6 @@ FB HashMap::local_find(dtable &table, const pkmer_t &key_kmer_, uint32_t bucket_
     }
     return ret; // only need to return (f, b) pair
 }
-
-upcxx::future<std::vector<FB>> HashMap::find_many(int target, const std::vector<pkmer_t> &key_kmers){
-    upcxx::future<std::vector<FB>> fut = upcxx::rpc(
-        target, HashMap::local_find_many, dist_table, key_kmers, num_bits, size);
-    return fut;
-};
-
-std::vector<FB> HashMap::local_find_many(
-        dtable &table, const std::vector<pkmer_t> &key_kmers, int num_bits, uint64_t size){
-    int n = key_kmers.size();
-    std::vector<FB> ret(n);
-
-    for(int i = 0; i < n; ++i){
-        const pkmer_t &key_kmer = key_kmers[i];
-        uint32_t bucket_idx = (key_kmer.hash() >> num_bits) % size;
-
-        std::vector<kmer_pair> &v = (*table)[bucket_idx];
-        // Resolve collision
-        for(kmer_pair &kp: v){
-            if(kp.kmer == key_kmer){
-                ret[i].b = kp.fb_ext[0];
-                ret[i].f = kp.fb_ext[1];
-                break;
-            }
-        }
-    }
-    return ret;
-};
-
-upcxx::future<> HashMap::insert_many(int target, const std::vector<kmer_pair> &kmers){
-    return upcxx::rpc(target,
-            HashMap::local_insert_many, dist_table, kmers, num_bits, size);
-};
-
-void HashMap::local_insert_many(dtable &table, const std::vector<kmer_pair> &kmers, int num_bits, uint64_t size){
-    // batch insertion
-    for(const kmer_pair &kmer: kmers){
-        uint32_t bucket_idx = (kmer.hash() >> num_bits) % size;
-        (*table)[bucket_idx].push_back(kmer);
-    }
-    return;
-};
 
 #else
 struct HashMap {
