@@ -187,16 +187,15 @@ int main(int argc, char** argv) {
                 int n = ret_v.size();
                 for(int i = 0; i < n; ++i){
                     std::list<kmer_pair> *contig_ptr = contig_ptrs[i];
-                    pkmer_t key_kmer = contig_ptr->back().next_kmer();
+                    auto &back = contig_ptr->back();
                     const FB &fb = ret_v[i];
-                    // push this return value to the back of the corresponding contig
-                    kmer_pair kmer;
-                    kmer.kmer = key_kmer;
-                    kmer.fb_ext[0] = fb.b;
-                    kmer.fb_ext[1] = fb.f;
 
                     // append this kmer
-                    contig_ptr->push_back(kmer);
+                    contig_ptr->push_back({});
+                    auto &new_back = contig_ptr->back();
+                    new_back.kmer = back.next_kmer();
+                    new_back.fb_ext[0] = fb.b;
+                    new_back.fb_ext[1] = fb.f;
                 }
             });
 
