@@ -44,7 +44,7 @@ int log2(int x){
     };
     // Ex. x=1000 will only use the last 3 bits
     // Ex. x=1010 will use the last 4 bits
-    if((1 << bits) == x) bits--;
+    if((1 << (bits-1)) == x) bits--;
     return bits;
 };
 
